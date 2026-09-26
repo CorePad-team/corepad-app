@@ -4,9 +4,10 @@
   "description": "",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/check-coral.mjs && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:coral": "node scripts/check-coral.mjs"
   },
   "author": "",
   "license": "ISC",

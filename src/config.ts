@@ -45,15 +45,17 @@ function pick(...names: string[]): unknown {
   }
   return null
 }
+// A forge dry-run writes the same manifest without broadcasting: never treat it as a deployment.
+const DRY_RUN = String(raw.mode ?? '').toLowerCase() === 'dry-run'
 const isAddr = (v: unknown): v is Address => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)
-const addr = (...n: string[]): Address | null => { const v = pick(...n); return isAddr(v) ? v : null }
+const addr = (...n: string[]): Address | null => { if (DRY_RUN) return null; const v = pick(...n); return isAddr(v) ? v : null }
 
 export const addresses = {
   factory: addr('factory', 'CorePadFactory', 'corePadFactory'),
   settlement: addr('settlement', 'Settlement'),
   treasury: addr('treasury', 'Treasury'),
 }
-const sb = pick('startBlock', 'deployBlock', 'fromBlock', 'blockNumber')
+const sb = pick('startBlock', 'deployedAtBlock', 'deployBlock', 'fromBlock', 'blockNumber')
 export const START_BLOCK: bigint = typeof sb === 'number' || (typeof sb === 'string' && /^\d+$/.test(sb)) ? BigInt(sb) : 0n
 
 /** True only when the protocol has actually been deployed to 99801. */
@@ -62,3 +64,12 @@ export const DEPLOYED = addresses.factory !== null
 export const SUPPLY = 1_000_000_000n * 10n ** 18n
 export const FOR_SALE = 800_000_000n * 10n ** 18n
 export const BOOK_TOKENS = 200_000_000n * 10n ** 18n
+
+/** Where the data on screen comes from. Chosen from the manifest/overrides, never from the chain id. */
+export type Environment = 'undeployed' | 'local-rehearsal' | 'testnet'
+export const ENVIRONMENT: Environment = RPC_OVERRIDE ? 'local-rehearsal' : DEPLOYED ? 'testnet' : 'undeployed'
+
+/** Labels that follow the data source, so no local action points at the public network. */
+export const NET = ENVIRONMENT === 'local-rehearsal'
+  ? { where: 'local rehearsal', action: 'locally', explorer: 'Target explorer', bridge: 'Target bridge' }
+  : { where: 'Elysium', action: 'on Elysium', explorer: 'Explorer', bridge: 'Bridge' }

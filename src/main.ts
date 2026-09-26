@@ -1,7 +1,7 @@
 import './style.css'
 import { h, short, toast, errMsg } from './ui'
 import { pub, wallet } from './chain'
-import { DEPLOYED, ELYSIUM } from './config'
+import { ELYSIUM, ENVIRONMENT } from './config'
 import { BRAND } from './brand'
 import { renderHome } from './views/home'
 import { renderLadder } from './views/ladder'
@@ -21,7 +21,7 @@ const app = document.getElementById('app')!
 
 function brandEl() {
   const a = h('a', { class: 'brand', href: '#/', 'aria-label': 'CorePad home' })
-  if (BRAND.lockup) a.append(h('img', { src: BRAND.lockup, alt: 'CorePad', height: '26' }))
+  if (BRAND.lockup) a.append(h('img', { src: BRAND.lockup, alt: 'CorePad', height: '28' }))
   else {
     if (BRAND.mark) a.append(h('img', { src: BRAND.mark, alt: '', height: '22' }))
     a.append(h('span', { class: 'wordmark' }, 'CorePad'))
@@ -40,11 +40,10 @@ function indexList() {
 
 function railFoot() {
   const blk = h('span', { class: 'num', 'data-blk': '' }, '—')
-  const dot = h('span', { class: 'pulse off', 'data-pulse': '' })
   const net = h('div', { class: 'net' },
-    h('div', { class: 'row' }, h('span', null, dot, 'Elysium testnet'), h('span', null, String(ELYSIUM.id))),
-    h('div', { class: 'row' }, h('span', null, 'block'), blk),
-    h('div', { class: 'row' }, h('span', null, 'protocol'), h('span', { class: DEPLOYED ? '' : 'coral' }, DEPLOYED ? 'deployed' : 'not deployed')),
+    h('div', { class: 'row' }, h('span', null, 'target'), h('b', null, 'Elysium ' + ELYSIUM.id)),
+    h('div', { class: 'row' }, h('span', null, 'last block read'), h('b', null, blk)),
+    h('div', { class: 'row' }, h('span', null, 'data'), h('b', null, ENV_SHORT)),
   )
   const btn = h('button', { class: 'btn wide', 'data-wallet': '' }, 'Connect wallet')
   btn.addEventListener('click', async () => {
@@ -54,6 +53,15 @@ function railFoot() {
     } catch (e) { toast(errMsg(e), true) }
   })
   return h('div', { class: 'railfoot' }, net, btn)
+}
+
+const ENV_SHORT = ENVIRONMENT === 'testnet' ? 'testnet' : ENVIRONMENT === 'local-rehearsal' ? 'local rehearsal' : 'pre-deployment'
+
+/** Provenance: where the numbers on screen come from, on every page. */
+function provenance() {
+  if (ENVIRONMENT === 'testnet') return h('div', { class: 'prov', role: 'note' }, h('b', null, 'ELYSIUM TESTNET'), h('span', null, 'Live reads from chain 99801. Testnet assets have no value.'))
+  if (ENVIRONMENT === 'local-rehearsal') return h('div', { class: 'prov', role: 'note' }, h('b', null, 'LOCAL REHEARSAL'), h('span', null, 'Real contract execution on a local node. Not Elysium testnet.'))
+  return h('div', { class: 'prov', role: 'note' }, h('b', null, 'PRE-DEPLOYMENT'), h('span', null, 'No CorePad testnet deployment yet. Nothing on this site is live data.'))
 }
 
 // ---- shell (built once) ----
@@ -66,15 +74,15 @@ idxBtn.addEventListener('click', () => {
   idxBtn.setAttribute('aria-expanded', String(open))
   idxBtn.textContent = open ? 'Close' : 'Index'
 })
-const topbar = h('header', { class: 'topbar' }, brandEl(), h('span', { class: 'blk' }, '#', h('span', { 'data-blk': '' }, '—')), idxBtn)
+const topbar = h('header', { class: 'topbar' }, brandEl(), h('span', { class: 'envtag' }, ENV_SHORT), idxBtn)
 const stage = h('main', { class: 'stage', id: 'stage' })
-app.append(h('div', { class: 'frame' }, rail, h('div', { style: 'min-width:0' }, topbar, drawer, stage)))
+app.append(h('div', { class: 'frame' }, rail, h('div', { class: 'main-col' }, topbar, drawer, provenance(), stage)))
 
 function paintWallet() {
   document.querySelectorAll<HTMLButtonElement>('[data-wallet]').forEach((b) => {
     if (!wallet.account) { b.textContent = wallet.available() ? 'Connect wallet' : 'No wallet detected'; b.className = 'btn wide' }
-    else if (wallet.chainId !== ELYSIUM.id) { b.textContent = 'Switch to 99801'; b.className = 'btn wide warn' }
-    else { b.textContent = short(wallet.account); b.className = 'btn wide ghost' }
+    else if (wallet.chainId !== ELYSIUM.id) { b.textContent = 'Wrong network · switch to 99801'; b.className = 'btn wide' }
+    else { b.textContent = short(wallet.account) + ' · 99801'; b.className = 'btn wide' }
   })
 }
 wallet.listeners.add(paintWallet)
@@ -85,9 +93,8 @@ async function tickBlock() {
   try {
     const n = await pub.getBlockNumber({ cacheTime: 0 })
     document.querySelectorAll('[data-blk]').forEach((e) => { e.textContent = n.toLocaleString('en-US') })
-    document.querySelectorAll('[data-pulse]').forEach((e) => e.classList.remove('off'))
   } catch {
-    document.querySelectorAll('[data-pulse]').forEach((e) => e.classList.add('off'))
+    document.querySelectorAll('[data-blk]').forEach((e) => { if (!e.textContent!.startsWith('STALE')) e.textContent = 'STALE · ' + e.textContent })
   }
 }
 tickBlock()

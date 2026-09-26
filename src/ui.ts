@@ -1,5 +1,5 @@
 import { formatEther, type Address, type Hash } from 'viem'
-import { EXPLORER } from './config'
+import { EXPLORER, ENVIRONMENT } from './config'
 
 /** Tiny element builder. Views build structure once; live values are written with textContent. */
 export function h<K extends keyof HTMLElementTagNameMap>(
@@ -18,8 +18,13 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 export const short = (a: string) => a.slice(0, 6) + '…' + a.slice(-4)
-export const addrLink = (a: Address) => `${EXPLORER}/address/${a}`
-export const txLink = (t: Hash) => `${EXPLORER}/tx/${t}`
+// Local rehearsal data does not exist on the public explorer: no links then.
+export const addrLink = (a: Address): string | null => ENVIRONMENT === 'testnet' ? `${EXPLORER}/address/${a}` : null
+export const txLink = (t: Hash): string | null => ENVIRONMENT === 'testnet' ? `${EXPLORER}/tx/${t}` : null
+/** An explorer link when one exists, plain text otherwise. */
+export function ext(href: string | null, text: string, attrs: Record<string, unknown> = {}): HTMLElement {
+  return href ? h('a', { href, target: '_blank', rel: 'noopener', ...attrs }, text) : h('span', attrs, text)
+}
 
 /** Numbers: fixed decimals, thin grouping. */
 export function fmt(n: number, d = 2): string {
@@ -33,20 +38,21 @@ export function hype(wei: bigint | null | undefined, d = 4): string {
 export function tokens(wei: bigint | null | undefined): string {
   if (wei === null || wei === undefined) return '—'
   const n = Number(formatEther(wei))
-  if (n >= 1e9) return fmt(n / 1e9, 3) + ' B'
-  if (n >= 1e6) return fmt(n / 1e6, 2) + ' M'
-  if (n >= 1e3) return fmt(n / 1e3, 2) + ' k'
+  if (n >= 1e9) return fmt(n / 1e9, 3) + '\u00a0B'
+  if (n >= 1e6) return fmt(n / 1e6, 2) + '\u00a0M'
+  if (n >= 1e3) return fmt(n / 1e3, 2) + '\u00a0k'
   return fmt(n, 2)
 }
-const SUB = '₀₁₂₃₄₅₆₇₈₉'
-/** Tiny prices as 0.0₈3180 (subscript = count of zeros after the point). */
+/** HYPE per token. Below 1e-4 in scientific notation (1.573e−7): scannable and comparable in a column. */
 export function price(p: number): string {
   if (!isFinite(p) || p <= 0) return '—'
-  if (p >= 0.001) return fmt(p, p >= 1 ? 4 : 6)
-  const zeros = Math.floor(-Math.log10(p))
-  const sig = Math.round(p * 10 ** (zeros + 4)).toString().padEnd(4, '0').slice(0, 4)
-  return '0.0' + String(zeros - 1).split('').map((c) => SUB[+c]).join('') + sig
+  if (p >= 0.0001) return fmt(p, p >= 1 ? 4 : 6)
+  const [m, e] = p.toExponential(3).split('e')
+  return `${m}e${e.replace('-', '−')}`
 }
+const NB = '\u00a0'
+/** amount + unit that never wraps apart */
+export const unit = (v: string, u: string) => v + NB + u
 export function pct(x: number, d = 2): string { return fmt(x * 100, d) + '%' }
 export function ago(sec: number): string {
   if (sec < 60) return Math.max(0, Math.floor(sec)) + 's'

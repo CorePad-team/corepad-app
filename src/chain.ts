@@ -7,12 +7,14 @@ import FactoryAbi from './abi/CorePadFactory.json'
 import PoolAbi from './abi/LaunchPool.json'
 import SettlementAbi from './abi/Settlement.json'
 import TokenAbi from './abi/CorePadToken.json'
+import AdapterAbi from './abi/IBridgeAdapter.json'
 
 export const abis = {
   factory: FactoryAbi as unknown as Abi,
   pool: PoolAbi as unknown as Abi,
   settlement: SettlementAbi as unknown as Abi,
   token: TokenAbi as unknown as Abi,
+  adapter: AdapterAbi as unknown as Abi,
 }
 
 // Same-origin proxy first (retries upstream server-side), public RPC as a direct fallback.
@@ -181,6 +183,8 @@ export type Stage = 'absorption' | 'graduated' | 'dispatched' | 'confirmed' | 'r
 export type Pipeline = {
   stage: Stage; ticket: bigint | null; listPrice: bigint | null; hype: bigint | null; tokens: bigint | null
   coreTokenIndex: bigint | null; spotPairIndex: bigint | null; graduatedTx: Hash | null; dispatchedTx: Hash | null; confirmedTx: Hash | null
+  /** adapter.isRouteReady(token): the HyperEVM mirror is registered and routed. null = could not be read */
+  routeReady: boolean | null; mirror: Address | null
 }
 const STATES = ['none', 'open', 'dispatched', 'confirmed', 'rescued'] as const
 /**
@@ -188,7 +192,7 @@ const STATES = ['none', 'open', 'dispatched', 'confirmed', 'rescued'] as const
  * Settlement.State: None, Open, Dispatched, Confirmed, Rescued.
  */
 export async function fetchPipeline(launch: Launch, st: PoolState): Promise<Pipeline> {
-  const p: Pipeline = { stage: st.graduated ? 'graduated' : 'absorption', ticket: null, listPrice: null, hype: null, tokens: null, coreTokenIndex: null, spotPairIndex: null, graduatedTx: null, dispatchedTx: null, confirmedTx: null }
+  const p: Pipeline = { stage: st.graduated ? 'graduated' : 'absorption', ticket: null, listPrice: null, hype: null, tokens: null, coreTokenIndex: null, spotPairIndex: null, graduatedTx: null, dispatchedTx: null, confirmedTx: null, routeReady: null, mirror: null }
   const settle = addresses.settlement
   if (!settle || !st.graduated || st.ticketId === null) return p
   const id = st.ticketId
@@ -199,6 +203,13 @@ export async function fetchPipeline(launch: Launch, st: PoolState): Promise<Pipe
   if (state === 'dispatched') p.stage = 'dispatched'
   if (state === 'confirmed') { p.stage = 'confirmed'; p.coreTokenIndex = BigInt(t.coreTokenIndex as bigint); p.spotPairIndex = BigInt(t.spotPairIndex as bigint) }
   if (state === 'rescued') p.stage = 'rescued'
+  if (t.mirror && t.mirror !== '0x0000000000000000000000000000000000000000') p.mirror = t.mirror as Address
+  if (state === 'open') {
+    try {
+      const adapter = await pub.readContract({ address: settle, abi: abis.settlement, functionName: 'adapter' }) as Address
+      p.routeReady = await pub.readContract({ address: adapter, abi: abis.adapter, functionName: 'isRouteReady', args: [launch.token] }) as boolean
+    } catch { p.routeReady = null }
+  } else if (state === 'dispatched' || state === 'confirmed') p.routeReady = true
   // tx hashes, for the explorer links
   const head = await pub.getBlockNumber({ cacheTime: 0 })
   const txOf = async (name: string) => {
