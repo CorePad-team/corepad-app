@@ -1,0 +1,117 @@
+import './style.css'
+import { h, short, toast, errMsg } from './ui'
+import { pub, wallet } from './chain'
+import { DEPLOYED, ELYSIUM } from './config'
+import { BRAND } from './brand'
+import { renderHome } from './views/home'
+import { renderLadder } from './views/ladder'
+import { renderLaunch } from './views/launch'
+import { renderIssue } from './views/issue'
+import { renderManual } from './views/manual'
+
+type View = (root: HTMLElement, arg: string) => (() => void) | void
+const routes: { key: string; n: string; t: string; s: string; view: View }[] = [
+  { key: '', n: '00', t: 'Field', s: 'overview', view: renderHome },
+  { key: 'ladder', n: '01', t: 'Ladder', s: 'launches', view: renderLadder },
+  { key: 'issue', n: '02', t: 'Issue', s: 'create', view: renderIssue },
+  { key: 'manual', n: '03', t: 'Manual', s: 'docs', view: renderManual },
+]
+
+const app = document.getElementById('app')!
+
+function brandEl() {
+  const a = h('a', { class: 'brand', href: '#/', 'aria-label': 'CorePad home' })
+  if (BRAND.lockup) a.append(h('img', { src: BRAND.lockup, alt: 'CorePad', height: '26' }))
+  else {
+    if (BRAND.mark) a.append(h('img', { src: BRAND.mark, alt: '', height: '22' }))
+    a.append(h('span', { class: 'wordmark' }, 'CorePad'))
+  }
+  return a
+}
+
+function indexList() {
+  const ul = h('ul', { class: 'index' })
+  for (const r of routes) {
+    ul.append(h('li', null, h('a', { href: '#/' + r.key, 'data-key': r.key },
+      h('span', { class: 'n' }, r.n), h('span', { class: 't' }, r.t), h('span', { class: 's' }, r.s))))
+  }
+  return ul
+}
+
+function railFoot() {
+  const blk = h('span', { class: 'num', 'data-blk': '' }, '—')
+  const dot = h('span', { class: 'pulse off', 'data-pulse': '' })
+  const net = h('div', { class: 'net' },
+    h('div', { class: 'row' }, h('span', null, dot, 'Elysium testnet'), h('span', null, String(ELYSIUM.id))),
+    h('div', { class: 'row' }, h('span', null, 'block'), blk),
+    h('div', { class: 'row' }, h('span', null, 'protocol'), h('span', { class: DEPLOYED ? '' : 'coral' }, DEPLOYED ? 'deployed' : 'not deployed')),
+  )
+  const btn = h('button', { class: 'btn wide', 'data-wallet': '' }, 'Connect wallet')
+  btn.addEventListener('click', async () => {
+    try {
+      if (!wallet.account) await wallet.connect()
+      if (wallet.chainId !== ELYSIUM.id) await wallet.ensureChain()
+    } catch (e) { toast(errMsg(e), true) }
+  })
+  return h('div', { class: 'railfoot' }, net, btn)
+}
+
+// ---- shell (built once) ----
+const rail = h('nav', { class: 'rail', 'aria-label': 'Index' }, brandEl(), indexList(), railFoot())
+const drawer = h('div', { class: 'drawer', id: 'drawer' }, indexList(), railFoot())
+const idxBtn = h('button', { class: 'idx', 'aria-expanded': 'false', 'aria-controls': 'drawer' }, 'Index')
+idxBtn.addEventListener('click', () => {
+  const open = !drawer.classList.contains('open')
+  drawer.classList.toggle('open', open)
+  idxBtn.setAttribute('aria-expanded', String(open))
+  idxBtn.textContent = open ? 'Close' : 'Index'
+})
+const topbar = h('header', { class: 'topbar' }, brandEl(), h('span', { class: 'blk' }, '#', h('span', { 'data-blk': '' }, '—')), idxBtn)
+const stage = h('main', { class: 'stage', id: 'stage' })
+app.append(h('div', { class: 'frame' }, rail, h('div', { style: 'min-width:0' }, topbar, drawer, stage)))
+
+function paintWallet() {
+  document.querySelectorAll<HTMLButtonElement>('[data-wallet]').forEach((b) => {
+    if (!wallet.account) { b.textContent = wallet.available() ? 'Connect wallet' : 'No wallet detected'; b.className = 'btn wide' }
+    else if (wallet.chainId !== ELYSIUM.id) { b.textContent = 'Switch to 99801'; b.className = 'btn wide warn' }
+    else { b.textContent = short(wallet.account); b.className = 'btn wide ghost' }
+  })
+}
+wallet.listeners.add(paintWallet)
+paintWallet()
+
+// ---- live block height: text-only updates ----
+async function tickBlock() {
+  try {
+    const n = await pub.getBlockNumber({ cacheTime: 0 })
+    document.querySelectorAll('[data-blk]').forEach((e) => { e.textContent = n.toLocaleString('en-US') })
+    document.querySelectorAll('[data-pulse]').forEach((e) => e.classList.remove('off'))
+  } catch {
+    document.querySelectorAll('[data-pulse]').forEach((e) => e.classList.add('off'))
+  }
+}
+tickBlock()
+setInterval(tickBlock, 3000)
+
+// ---- router ----
+let cleanup: (() => void) | void
+function route() {
+  const hash = location.hash.replace(/^#\/?/, '')
+  const [head, arg = ''] = hash.split('/')
+  if (typeof cleanup === 'function') cleanup()
+  stage.replaceChildren()
+  drawer.classList.remove('open'); idxBtn.setAttribute('aria-expanded', 'false'); idxBtn.textContent = 'Index'
+  let key = head
+  let view: View
+  if (head === 'launch') { view = renderLaunch; key = 'ladder' }
+  else view = (routes.find((r) => r.key === head) ?? routes[0]).view
+  document.querySelectorAll<HTMLAnchorElement>('.index a').forEach((a) => {
+    if (a.dataset.key === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current')
+  })
+  const r = routes.find((x) => x.key === key)
+  document.title = r && r.key ? `${r.t} · CorePad` : 'CorePad'
+  cleanup = view(stage, decodeURIComponent(arg))
+  window.scrollTo(0, 0)
+}
+window.addEventListener('hashchange', route)
+route()

@@ -1,0 +1,1 @@
+Copied from /Users/pro/corepad-contracts/abi (forge build output via ops/export-abi.sh) at commit 1eabb7b on 2026-09-26T19:24:58Z
