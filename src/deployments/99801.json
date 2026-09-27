@@ -1,7 +1,20 @@
 {
+  "CorePadFactory": "0x8547e759715b1bbd67291e06395E0C5FfeA4de13",
+  "ElysiumBridgeAdapter": "0x9BAA610A43B8f62F0d014aF4EEFB0dF44AF87e37",
+  "Settlement": "0x2cde65C326E61cD9619F4f4f08D20Eac0015559C",
+  "bridgeFactory": "0xb94A38a4aC46970559E89E566f2486a3Fc56BE5a",
   "chainId": 99801,
-  "factory": null,
-  "settlement": null,
-  "treasury": null,
-  "startBlock": null
+  "coreSettler": "0x0d2246121587C62f0e97a3E96f17f58824324310",
+  "deployedAtBlock": 379462,
+  "deployer": "0x0d2246121587C62f0e97a3E96f17f58824324310",
+  "gateway": "0x7255150a0340852Fe4B4B5657C5AcE6c09a4F959",
+  "graduationHype": "400000000000000000",
+  "guardMaxPerAddress": "10000000000000000000000000",
+  "guardSeconds": 60,
+  "keeper": "0x0d2246121587C62f0e97a3E96f17f58824324310",
+  "mode": "broadcast",
+  "rescueDelay": 604800,
+  "router": "0x89659883a9d980925733B0A698F117AAb65ac718",
+  "tickerReserve": "100000000000000000",
+  "treasury": "0x0d2246121587C62f0e97a3E96f17f58824324310"
 }
