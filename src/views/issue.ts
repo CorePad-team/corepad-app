@@ -1,6 +1,6 @@
 import { parseEther, formatEther, decodeEventLog, type Log } from 'viem'
 import { h, tokens, hype, pct, price, toast, errMsg, short, txLink } from '../ui'
-import { abis, pub, send, argsFor, firstFn, wallet } from '../chain'
+import { abis, pub, send, mined, argsFor, firstFn, wallet } from '../chain'
 import { DEPLOYED, addresses, SUPPLY, NET, ENVIRONMENT } from '../config'
 import { notDeployed, footer } from './common'
 
@@ -144,7 +144,7 @@ export function renderIssue(root: HTMLElement) {
       const tx = await send({ address: addresses.factory, abi: abis.factory, functionName: 'launch', value,
         args: argsFor(abis.factory, 'launch', { name: n, symbol: s, minTokensOut: minOut, minOut }) })
       submit.textContent = 'Waiting for block…'
-      const rc = await pub.waitForTransactionReceipt({ hash: tx })
+      const rc = await mined(tx)
       let id: bigint | null = null
       for (const lg of rc.logs as Log[]) {
         try {

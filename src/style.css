@@ -372,7 +372,7 @@ details.hint summary::-webkit-details-marker { display: none; }
   .captions { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .captions .c2 { display: block; }
   .captions .cx { display: none; }
-  .tape .tr { grid-template-areas: 'sd hy tk' 'bk tr tx'; }
+  .tape .tr { grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'sd hy tk' 'bk tr tx'; }
   .tape .c-tx { display: block; grid-area: tx; }
   .tape .c-tr { text-align: left; }
 }

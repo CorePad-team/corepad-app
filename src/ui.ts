@@ -72,6 +72,13 @@ export function toast(msg: string, bad = false, ms = 6000) {
   toastTimer = window.setTimeout(() => el!.classList.remove('show'), ms)
 }
 export function errMsg(e: unknown): string {
-  const x = e as { shortMessage?: string; message?: string }
-  return (x?.shortMessage || x?.message || String(e)).split('\n')[0].slice(0, 240)
+  const x = e as { shortMessage?: string; message?: string; walk?: (f: (c: unknown) => boolean) => unknown }
+  const base = (x?.shortMessage || x?.message || String(e)).split('\n')[0]
+  // viem keeps the decoded custom error (GuardExceeded, Slippage, …) on the cause, not in shortMessage
+  const rev = x?.walk?.((c) => (c as { name?: string })?.name === 'ContractFunctionRevertedError') as
+    { data?: { errorName?: string; args?: readonly unknown[] }; reason?: string; signature?: string } | undefined
+  const why = rev?.data?.errorName
+    ? rev.data.errorName + (rev.data.args?.length ? '(' + rev.data.args.map(String).join(', ') + ')' : '')
+    : rev?.reason ?? rev?.signature
+  return (why && !base.includes(why) ? `${base} ${why}` : base).slice(0, 240)
 }

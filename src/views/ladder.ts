@@ -81,7 +81,7 @@ export function mountLadder(host: HTMLElement, opts: { limit?: number; filter?: 
       r.pc.textContent = s.frozen ? '0%' : bpsPct(rem)
       r.rs.textContent = s.graduated
         ? (s.target !== null ? unit(hype(s.target, 2), '→ ticket') : '→ ticket')
-        : s.raised !== null ? `${hype(s.raised, 2)} / ${s.target !== null ? hype(s.target, 0) : '—'}` : '—'
+        : s.raised !== null ? `${hype(s.raised, 2)} / ${s.target !== null ? hype(s.target, 2) : '—'}` : '—'
       r.st.textContent = s.graduated ? 'Graduated' : s.frozen ? 'Curve closed' : 'Absorbing'
       r.st.className = 'state' + (s.frozen ? ' done' : '')
     }

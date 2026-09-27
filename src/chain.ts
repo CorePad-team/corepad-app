@@ -84,8 +84,9 @@ export type PoolState = {
 
 async function readOpt<T>(address: Address, abi: Abi, names: string[], args: unknown[] = []): Promise<T | null> {
   const fn = firstFn(abi, ...names)
-  if (!fn) return null
-  try { return await pub.readContract({ address, abi, functionName: fn, args }) as T } catch { return null }
+  if (!fn) return null // not in this ABI: genuinely unknown
+  // A failed read must throw (callers keep the last good state and show STALE), never read as null/0.
+  return await pub.readContract({ address, abi, functionName: fn, args }) as T
 }
 
 export async function poolState(pool: Address): Promise<PoolState> {
@@ -283,6 +284,13 @@ export const wallet = {
     this.chainId = Number(await p.request({ method: 'eth_chainId' }))
     this.emit()
   },
+}
+
+/** Receipt of a mined tx; throws when it reverted (a mined revert is not a success). */
+export async function mined(hash: Hash) {
+  const rc = await pub.waitForTransactionReceipt({ hash })
+  if (rc.status !== 'success') throw new Error(`Transaction reverted on-chain (tx ${hash.slice(0, 10)}…, block ${rc.blockNumber})`)
+  return rc
 }
 
 export async function send(req: { address: Address; abi: Abi; functionName: string; args: unknown[]; value?: bigint }): Promise<Hash> {

@@ -1,7 +1,7 @@
 import { parseEther, formatEther } from 'viem'
 import { h, price, pct, hype, tokens, short, addrLink, txLink, ext, toast, errMsg, unit } from '../ui'
 import {
-  abis, pub, wallet, send, fetchLaunches, poolState, quoteBuy, quoteSell, fetchTrades, fetchPipeline,
+  abis, pub, wallet, send, mined, fetchLaunches, poolState, quoteBuy, quoteSell, fetchTrades, fetchPipeline,
   argsFor, type Launch, type PoolState, type Trade, type Pipeline,
 } from '../chain'
 import { DEPLOYED, SUPPLY, addresses } from '../config'
@@ -241,7 +241,7 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
         const tx = await send({ address: L.pool, abi: abis.pool, functionName: 'buy', value: x,
           args: argsFor(abis.pool, 'buy', { minTokensOut: lastMin, deadline }) })
         submit.textContent = 'Waiting for block…'
-        await pub.waitForTransactionReceipt({ hash: tx })
+        await mined(tx)
         toast('Bought · tx ' + short(tx))
       } else {
         if (!wallet.account) await wallet.connect()
@@ -249,13 +249,13 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
         if (allowance < x) {
           submit.textContent = 'Approve in wallet…'
           const ap = await send({ address: L.token, abi: abis.token, functionName: 'approve', args: [L.pool, x] })
-          await pub.waitForTransactionReceipt({ hash: ap })
+          await mined(ap)
         }
         submit.textContent = 'Confirm in wallet…'
         const tx = await send({ address: L.pool, abi: abis.pool, functionName: 'sell',
           args: argsFor(abis.pool, 'sell', { tokensIn: x, minHypeOut: lastMin, deadline }) })
         submit.textContent = 'Waiting for block…'
-        await pub.waitForTransactionReceipt({ hash: tx })
+        await mined(tx)
         toast('Sold · tx ' + short(tx))
       }
       amt.value = ''
@@ -323,7 +323,7 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
       const b = h('button', { class: 'btn solid wide', type: 'button' }, 'Call graduate()')
       b.addEventListener('click', async () => {
         b.setAttribute('disabled', '')
-        try { const tx = await send({ address: L.pool, abi: abis.pool, functionName: 'graduate', args: [] }); await pub.waitForTransactionReceipt({ hash: tx }); toast('Graduated · tx ' + short(tx)); await refresh(); await refreshPipe() }
+        try { const tx = await send({ address: L.pool, abi: abis.pool, functionName: 'graduate', args: [] }); await mined(tx); toast('Graduated · tx ' + short(tx)); await refresh(); await refreshPipe() }
         catch (e) { toast(errMsg(e), false, 9000) } finally { b.removeAttribute('disabled') }
       })
       kids.push(b)
@@ -387,7 +387,7 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
       const b = h('button', { class: 'btn', type: 'button' }, `dispatch(${ticketId})`)
       b.addEventListener('click', async () => {
         b.setAttribute('disabled', '')
-        try { const tx = await send({ address: settle, abi: abis.settlement, functionName: 'dispatch', args: [ticketId] }); await pub.waitForTransactionReceipt({ hash: tx }); toast('Dispatched · tx ' + short(tx)); await refreshPipe() }
+        try { const tx = await send({ address: settle, abi: abis.settlement, functionName: 'dispatch', args: [ticketId] }); await mined(tx); toast('Dispatched · tx ' + short(tx)); await refreshPipe() }
         catch (e) { toast(errMsg(e), false, 9000) } finally { b.removeAttribute('disabled') }
       })
       trackAct.append(b)
