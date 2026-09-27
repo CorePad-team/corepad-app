@@ -91,7 +91,7 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
   })
   const trackAct = h('div', { class: 'trackact' })
   const readiness = h('p', { class: 'hint', style: 'margin:0' },
-    'Testnet readiness (SPEC, observed 2026-09-26): the testnet tickerReserve (0.5 HYPE) cannot pay a testnet ticker, whose auction ran 1,439.9 → 1,259.7 HYPE that day, and HyperCoreDepositFactory is not published on testnet. Until both change, the HIP-1 step is blocked on testnet.')
+    'Testnet readiness (SPEC, observed 2026-09-26): the testnet tickerReserve (0.1 HYPE) cannot pay a testnet ticker, whose auction ran 1,439.9 → 1,259.7 HYPE that day, and HyperCoreDepositFactory is not published on testnet. Until both change, the HIP-1 step is blocked on testnet.')
   const track = h('section', { class: 'track a-pipeline', 'aria-label': 'Pipeline' }, trackTitle, trackSub, h('ol', null, ...stations.map((s) => s.li)), trackAct, readiness)
 
   /* ---- ticket ---- */

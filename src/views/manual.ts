@@ -38,7 +38,7 @@ export function renderManual(root: HTMLElement) {
       step('List · HyperCore', ['Keeper: HIP-1 ceremony within ', c('tickerBudget'), ', deposit, HYPE → USDC, symmetric TOKEN/USDC ladder around ', c('listPrice'), '.']),
       step('Confirm · Elysium', ['Keeper: ', c('confirm(id, coreTokenIndex, spotPairIndex)'), '.']),
     ),
-    h('p', { class: 'note', style: 'border-left:1px solid var(--mint);padding-left:14px' }, h('strong', { style: 'font-weight:500' }, 'Testnet readiness. '), 'Observed 2026-09-26 (SPEC): the testnet ', c('tickerReserve'), ' of 0.5 HYPE cannot pay a testnet ticker, whose auction ran 1,439.9 → 1,259.7 HYPE that day, and ', c('HyperCoreDepositFactory'), ' is not published on testnet. The HIP-1 and deposit steps are blocked on testnet until either changes. These are dated observations, not current quotes.'),
+    h('p', { class: 'note', style: 'border-left:1px solid var(--mint);padding-left:14px' }, h('strong', { style: 'font-weight:500' }, 'Testnet readiness. '), 'Observed 2026-09-26 (SPEC): the testnet ', c('tickerReserve'), ' of 0.1 HYPE cannot pay a testnet ticker, whose auction ran 1,439.9 → 1,259.7 HYPE that day, and ', c('HyperCoreDepositFactory'), ' is not published on testnet. The HIP-1 and deposit steps are blocked on testnet until either changes. These are dated observations, not current quotes.'),
     h('h3', null, 'The curve'),
     p('Constant product on virtual reserves. With ', c('G'), ' the graduation target:'),
     h('pre', { tabindex: '0' }, `virtualHype0  = G × 273 / 800
