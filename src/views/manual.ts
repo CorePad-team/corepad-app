@@ -69,7 +69,7 @@ listPrice       = virtualHype_end / 273 M               (HYPE per token)`),
   def('Fee', '1 % of the HYPE leg', 'LaunchPool.FEE_BPS · buys and sells → treasury')
   def('Launch guard', DEPLOYED ? 'reading…' : '60 s · 1 % (defaults)', 'CorePadFactory.guardSeconds / guardMaxPerAddress', 'guard')
   def('Creator buy cap', '2 % of supply', 'LaunchPool.CREATOR_MAX')
-  def('Rescue delay', DEPLOYED ? 'reading…' : '7 days (spec)', 'Settlement.rescueDelay', 'rescueDelay')
+  def('Abort delay', DEPLOYED ? 'reading…' : '7 days (spec)', 'Settlement.rescueDelay · after graduation, 1–30 days', 'rescueDelay')
   add('parameters', 'Parameters', h('p', { class: 'sec2' }, ENVIRONMENT === 'local-rehearsal' ? 'Protocol constants, and the configuration of the connected local rehearsal (not the intended testnet or mainnet settings).' : 'Protocol constants, and the configuration read from the deployed factory.'), defs)
 
   add('trust', 'Trust model',
@@ -77,7 +77,8 @@ listPrice       = virtualHype_end / 273 M               (HYPE per token)`),
       h('li', null, h('strong', null, 'Absorption and graduation are on-chain. '), 'Buy, sell, freeze and ', c('graduate()'), ' need no operator. Anyone can graduate a sold-out pool.'),
       h('li', null, h('strong', null, 'Dispatch is permissionless. '), c('dispatch(id)'), ' sends the ticket’s assets through the canonical bridge to the adapter’s immutable ', c('coreSettler'), ' on HyperEVM. The Orbit challenge period applies.'),
       h('li', null, h('strong', null, 'Settlement runs through a keeper: the one off-chain step. '), 'A HyperCore spot listing is an L1-signed HIP-1 ceremony that a contract cannot sign, and ', c('ElysiumCoreWriter'), ' does not exist yet. The keeper holds the keeper role on Settlement and nothing else; it reads ', c('Graduated'), '/', c('Dispatched'), ' and calls ', c('confirm'), '.'),
-      h('li', null, h('strong', null, 'Open-ticket rescue. '), 'After ', c('rescueDelay'), ', the immutable treasury can ', c('rescue(id)'), ' a ticket that is still open (never dispatched). Dispatched assets are outside this rescue path.'),
+      h('li', null, h('strong', null, 'Abort, never confiscation. '), 'If a ticket is still open (never dispatched) ', c('rescueDelay'), ' after graduation, anyone can call ', c('abort(id)'), ': its HYPE and book tokens return to the pool, which reopens the curve where it stopped so every holder can sell back. It can graduate again later with a new ticket. The treasury receives nothing from an abort; it only receives fees and swept unaccounted surplus. Dispatched assets are in keeper custody on HyperEVM (see the audit, M-3).'),
+      h('li', null, h('strong', null, 'Unique symbols. '), 'A symbol can be launched once across CorePad, and a short list of major HyperCore tickers (HYPE, USDC, USDT, USDE, USDH, PURR, BTC, ETH, SOL, UBTC, UETH, USOL, HFUN) is reserved. The keeper also checks the ticker is free on HyperCore before dispatch.'),
       h('li', null, h('strong', null, 'No arbitrary calls. '), 'No free spender, no free calldata. Token metadata is immutable; no fee-on-transfer, no rebase.'),
       h('li', null, h('strong', null, 'CoreWriter lane, not live. '), 'Settlement holds a set-once ', c('ICoreWriterAdapter'), ' slot, unused in v0.'),
     ))

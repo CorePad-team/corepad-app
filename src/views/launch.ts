@@ -4,7 +4,7 @@ import {
   abis, pub, wallet, send, mined, fetchLaunches, poolState, quoteBuy, quoteSell, fetchTrades, fetchPipeline,
   argsFor, type Launch, type PoolState, type Trade, type Pipeline,
 } from '../chain'
-import { DEPLOYED, SUPPLY, addresses } from '../config'
+import { DEPLOYED, SUPPLY, FOR_SALE, addresses } from '../config'
 import { notDeployed, footer } from './common'
 
 const SLIPS = [0.5, 1, 2, 5]
@@ -104,6 +104,9 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
   const bal = h('span', null, '')
   const maxBtn = h('button', { type: 'button', class: 'linkbtn', 'aria-label': 'Use maximum balance' }, 'max')
   const qOut = h('span', { class: 'num' }, '—'), qMin = h('span', { class: 'num' }, '—'), qFee = h('span', { class: 'num' }, '—'), qImp = h('span', { class: 'num' }, '—')
+  const qRefund = h('span', { class: 'num' }, '—')
+  const qRefundRow = h('div', { style: 'display:none', 'data-q': 'refund' }, h('span', null, 'Refunded · clipped at 800 M'), qRefund)
+  const reopenNote = h('div', { class: 'guard', style: 'display:none', 'data-reopen': '' })
   const note = h('div', { class: 'note' })
   const guardBox = h('div', { class: 'guard', style: 'display:none' })
   const submit = h('button', { class: 'btn solid wide', type: 'button' }, 'Buy')
@@ -116,10 +119,10 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
     h('div', { class: 'rowctl' }, h('span', { class: 'label' }, 'Deadline'), dlSeg),
     h('div', { class: 'quote' },
       h('div', null, h('span', null, 'You receive'), qOut), h('div', null, h('span', null, 'Minimum after slippage'), qMin),
-      h('div', null, h('span', null, 'Fee · 1 % → treasury'), qFee), h('div', null, h('span', null, 'Price impact'), qImp)),
+      h('div', null, h('span', null, 'Fee · 1 % → treasury'), qFee), qRefundRow, h('div', null, h('span', null, 'Price impact'), qImp)),
     guardBox, submit, note)
   const closedBox = h('div', { style: 'display:none;gap:12px' })
-  const ticket = h('section', { class: 'ticket a-ticket', 'aria-label': 'Trade' }, h('span', { class: 'label tlabel' }, 'Trade · curve'), ticketBody, closedBox)
+  const ticket = h('section', { class: 'ticket a-ticket', 'aria-label': 'Trade' }, h('span', { class: 'label tlabel' }, 'Trade · curve'), reopenNote, ticketBody, closedBox)
 
   /* ---- tape ---- */
   const tapeBody = h('div')
@@ -135,6 +138,8 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
   /* ---- ticket behaviour ---- */
   let busy = false
   let lastQuoteOk = false
+  /** Set when the quoted buy exceeds the remaining launch-guard allowance: the buy is disabled. */
+  let guardBlock: string | null = null
   /** The action says exactly what is possible right now. */
   function updateAction() {
     if (busy) return
@@ -143,6 +148,7 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
     if (!wallet.available()) label = 'Wallet required · no provider found'
     else if (!wallet.account) { label = 'Connect wallet'; ok = true }
     else if (!x) label = 'Enter an amount'
+    else if (side === 'buy' && guardBlock) label = 'Over your launch-guard allowance'
     else if (!lastQuoteOk) label = 'Quote unavailable'
     else { label = `${side === 'buy' ? 'Buy' : 'Sell'} ${L.symbol}`; ok = true }
     submit.textContent = label
@@ -196,7 +202,8 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
   amt.addEventListener('input', requote)
   async function doQuote() {
     const x = parsed(); const seq = ++qSeq
-    lastMin = null; lastQuoteOk = false; updateAction()
+    lastMin = null; lastQuoteOk = false; guardBlock = null; updateAction()
+    qRefundRow.style.display = 'none'
     if (!x || !st) { qOut.textContent = qMin.textContent = qFee.textContent = qImp.textContent = '—'; note.textContent = ''; return }
     try {
       const bps = BigInt(Math.round(slip * 100))
@@ -207,10 +214,20 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
         qOut.textContent = unit(tokens(q.out), L.symbol)
         qMin.textContent = tokens(min)
         qFee.textContent = unit(hype(q.fee, 6), 'HYPE')
-        const exec = Number(formatEther(x - q.fee)) / Math.max(1e-30, Number(formatEther(q.out)))
-        qImp.textContent = pct(exec / st.price - 1, 2)
-        note.textContent = q.clipped ? 'This buy crosses the graduation line: it is clipped at 800 M and the excess HYPE is refunded.' : ''
-        lastQuoteOk = q.out > 0n; updateAction()
+        // Price impact on what is actually charged: a clipped buy keeps only amount − refund.
+        const exec = Number(formatEther(q.spent - q.fee)) / Math.max(1e-30, Number(formatEther(q.out)))
+        qImp.textContent = q.out > 0n ? pct(exec / st.price - 1, 2) : '—'
+        if (q.refund > 0n) { qRefundRow.style.display = ''; qRefund.textContent = unit(hype(q.refund, 6), 'HYPE') }
+        note.textContent = q.clipped
+          ? `This buy crosses the graduation line: it is clipped at 800 M. You pay ${hype(q.spent, 6)} HYPE and ${hype(q.refund, 6)} HYPE is refunded in the same transaction.`
+          : st.sold >= FOR_SALE && q.out === 0n ? 'The reopened curve is sold out: buys resume once holders sell back.' : ''
+        // Launch guard pre-check (msg.sender and tx.origin are the same EOA from this app)
+        if (st.guardActive && guardLeft !== null && q.out > guardLeft) {
+          const left = st.launchedAt !== null && st.guardSeconds !== null ? Math.max(0, Number(st.launchedAt + st.guardSeconds) - Math.floor(Date.now() / 1000)) : null
+          guardBlock = `Launch guard: this buy gives ${tokens(q.out)} but your remaining allowance is ${tokens(guardLeft)} (cumulative per address and per transaction origin). Reduce the amount${left !== null ? ` or wait ${left} s until the guard lifts` : ''}; the contract would revert GuardExceeded.`
+          note.textContent = guardBlock
+        }
+        lastQuoteOk = q.out > 0n && !guardBlock; updateAction()
       } else {
         const q = await quoteSell(L.pool, st, x); if (seq !== qSeq) return
         const min = (q.out * (10_000n - bps)) / 10_000n
@@ -274,7 +291,8 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
     soldTxt.textContent = tokens(st.sold)
     pctTxt.textContent = pct(st.progress, 2)
     if (st.graduated) {
-      m1k.textContent = 'Moved to Settlement'
+      const stg = pipe?.stage ?? 'graduated'
+      m1k.textContent = stg === 'confirmed' ? 'Settled on HyperCore' : stg === 'dispatched' ? 'Dispatched to HyperEVM' : 'Held in Settlement · ticket open'
       m1.textContent = pipe?.hype != null ? `${unit(hype(pipe.hype, 4), 'HYPE')} · ${tokens(pipe.tokens)}` : '—'
       m2k.textContent = 'Final curve price'
       m2.textContent = unit(price(st.price), 'HYPE/token')
@@ -303,7 +321,12 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
       sGuard.textContent = st.guardActive === null ? '—' : 'lifted'
       guardBox.style.display = 'none'
     }
-    ticket.querySelector<HTMLElement>('.tlabel')!.textContent = done ? 'Status' : 'Trade · curve'
+    ticket.querySelector<HTMLElement>('.tlabel')!.textContent = done ? 'Status' : pipe?.stage === 'aborted' ? 'Trade · curve reopened' : 'Trade · curve'
+    if (!done && pipe?.stage === 'aborted') {
+      reopenNote.style.display = ''
+      reopenNote.replaceChildren(h('b', null, `TICKET #${pipe.ticket} ABORTED · TRADING REOPENED`),
+        'The settlement ticket was not dispatched within rescueDelay, so it was aborted: its HYPE and the 200 M book tokens went back to this pool and the curve resumed where it stopped. You can sell back now. A later crossing buy freezes the curve again for a new graduation. The treasury received nothing.')
+    } else reopenNote.style.display = 'none'
     ticketBody.style.display = done ? 'none' : 'grid'
     closedBox.style.display = done ? 'grid' : 'none'
     staleTag.textContent = stale ? '· STALE, last read failed' : ''
@@ -311,14 +334,21 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
 
   let closedSig = ''
   function paintClosed() {
-    const sig = `${st?.frozen}|${st?.graduated}|${st?.ticketId}`
+    const stage = pipe?.stage ?? (st?.graduated ? 'graduated' : 'absorption')
+    const sig = `${st?.frozen}|${st?.graduated}|${st?.ticketId}|${stage}|${pipe?.coreTokenIndex}`
     if (!st || sig === closedSig) return
     closedSig = sig
+    const tk = st.ticketId !== null ? ' #' + st.ticketId : ''
+    const [title, body] = !st.graduated
+      ? ['Curve closed · awaiting graduate()', 'All 800 M are sold and the pool is frozen: no buy, no sell. Anyone can call graduate() to open the settlement ticket.']
+      : stage === 'confirmed'
+        ? [`Listed on HyperCore · ticket${tk} confirmed`, `The book is live on HyperCore: token ${pipe?.coreTokenIndex}, spot pair @${pipe?.spotPairIndex}. Nothing remains on Elysium.`]
+        : stage === 'dispatched'
+          ? [`Dispatched to HyperEVM · ticket${tk}`, 'The HYPE and the 200 M book tokens have left Elysium through the canonical bridge to coreSettler. After the challenge period the keeper claims them and runs the HIP-1 listing.']
+          : [`Curve closed · settlement ticket${tk} open`, 'No trading on the curve. Its HYPE and the 200 M book tokens are held in Settlement until dispatch; if the ticket is not dispatched within rescueDelay, anyone can abort it and trading reopens here.']
     const kids: Node[] = [
-      h('strong', { style: 'font-weight:500;font-size:17px;line-height:24px' }, st.graduated ? `Curve closed · settlement ticket${st.ticketId !== null ? ' #' + st.ticketId : ''} open` : 'Curve closed · awaiting graduate()'),
-      h('p', { class: 'note', style: 'margin:0' }, st.graduated
-        ? 'No trading on the curve. Its HYPE and the 200 M book tokens are in Settlement; the next dependency is shown in the settlement tracker.'
-        : 'All 800 M are sold and the pool is frozen: no buy, no sell. Anyone can call graduate() to open the settlement ticket.')]
+      h('strong', { style: 'font-weight:500;font-size:17px;line-height:24px' }, title),
+      h('p', { class: 'note', style: 'margin:0' }, body)]
     if (!st.graduated) {
       const b = h('button', { class: 'btn solid wide', type: 'button' }, 'Call graduate()')
       b.addEventListener('click', async () => {
@@ -341,24 +371,28 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
     let cur: number
     if (stage === 'confirmed') cur = 7
     else if (stage === 'dispatched') cur = 4
-    else if (stage === 'graduated' || stage === 'rescued') cur = tk === null ? 1 : pipe?.routeReady ? 3 : 2
-    else cur = st.frozen ? 1 : 0
+    else if (stage === 'graduated') cur = tk === null ? 1 : pipe?.routeReady ? 3 : 2
+    else cur = st.frozen ? 1 : 0 // absorption, or aborted: the curve trades again
     stations.forEach((s, i) => {
       s.li.className = i < cur ? 'done' : i === cur ? 'now' : ''
       if (i === cur) s.li.setAttribute('aria-current', 'step'); else s.li.removeAttribute('aria-current')
     })
-    trackTitle.textContent = tk !== null ? `Settlement · ticket #${tk}` : 'Launch pipeline'
-    trackSub.textContent = tk !== null ? '' : 'No settlement ticket yet. One opens when graduate() runs on a sold-out curve.'
-    trackSub.style.display = tk !== null ? 'none' : ''
+    const aborted = stage === 'aborted'
+    trackTitle.textContent = aborted ? `Launch pipeline · ticket #${tk} aborted` : tk !== null ? `Settlement · ticket #${tk}` : 'Launch pipeline'
+    trackSub.textContent = aborted ? `Aborted → trading reopened. Ticket #${tk} was not dispatched within rescueDelay; its HYPE and book tokens were returned to the pool and the curve trades again. The next graduation opens a new ticket.`
+      : tk !== null ? '' : 'No settlement ticket yet. One opens when graduate() runs on a sold-out curve.'
+    trackSub.style.display = tk !== null && !aborted ? 'none' : ''
     const [abs, grad, route, disp, claim, hip, conf] = stations
     abs.d.textContent = st.frozen
       ? `Curve closed at ${price(st.price)} HYPE/token.`
       : `${pct(st.progress, 2)} of 800 M sold. Executor: anyone. Next: ${tokens(800_000_000n * 10n ** 18n - st.sold)} left to sell.`
     abs.ev.textContent = `LaunchCreated · block ${L.block}`
-    grad.d.textContent = tk !== null
-      ? `Ticket #${tk} · listPrice ${pipe?.listPrice != null ? price(Number(formatEther(pipe.listPrice))) : '—'} HYPE/token.`
-      : st.frozen ? 'Executor: anyone. Next: call graduate().' : 'Opens at 800 M sold, after graduate().'
-    grad.ev.replaceChildren(txEv(pipe?.graduatedTx ?? null))
+    grad.d.textContent = aborted
+      ? `Ticket #${tk} aborted: assets returned to the pool, trading reopened. A new ticket opens at the next graduate().`
+      : tk !== null
+        ? `Ticket #${tk} · listPrice ${pipe?.listPrice != null ? price(Number(formatEther(pipe.listPrice))) : '—'} HYPE/token.`
+        : st.frozen ? 'Executor: anyone. Next: call graduate().' : 'Opens at 800 M sold, after graduate().'
+    grad.ev.replaceChildren(aborted ? txEv(pipe?.abortedTx ?? null) : txEv(pipe?.graduatedTx ?? null))
     route.d.textContent = cur > 2 ? 'The HyperEVM mirror is registered and the Elysium router routes it.'
       : cur < 2 ? 'Keeper registers the HyperEVM mirror (createAndRegisterL1Mirror) before dispatch.'
       : pipe?.routeReady === false ? 'Awaiting mirror registration. Executor: keeper on HyperEVM. dispatch() reverts until the route is ready.'
@@ -372,19 +406,40 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
     hip.d.textContent = cur > 5 ? 'Implied by confirm().' : `Keeper: HIP-1 ceremony within tickerBudget, deposit, TOKEN/USDC ladder around listPrice (converted from HYPE).`
     conf.d.textContent = stage === 'confirmed' ? `Core token ${pipe!.coreTokenIndex} · spot pair @${pipe!.spotPairIndex}` : 'Keeper calls confirm(id, coreTokenIndex, spotPairIndex).'
     conf.ev.replaceChildren(txEv(pipe?.confirmedTx ?? null))
-    if (stage === 'rescued') { grad.d.textContent += ' Rescued to the treasury after rescueDelay; settlement will not proceed.' }
+    if (stage === 'graduated' && tk !== null && pipe?.abortableAt) {
+      const at = Number(pipe.abortableAt)
+      grad.d.textContent += Math.floor(Date.now() / 1000) >= at
+        ? ' Not dispatched within rescueDelay: anyone can abort it now (assets back to the pool, trading reopens).'
+        : ` If not dispatched by ${new Date(at * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC, anyone can abort it (assets back to the pool, trading reopens).`
+    }
 
-    // dispatch(id) is offered only when the chain itself says it would succeed right now
-    const sig = `${stage}|${tk}|${pipe?.routeReady}`
+    // dispatch(id) / abort(id) are offered only when the chain itself says they would succeed right now
+    const abortDue = stage === 'graduated' && pipe?.abortableAt ? Math.floor(Date.now() / 1000) >= Number(pipe.abortableAt) : false
+    const sig = `${stage}|${tk}|${pipe?.routeReady}|${abortDue}`
     if (sig === actSig) return
     actSig = sig
     trackAct.replaceChildren()
-    if (stage !== 'graduated' || tk === null || !addresses.settlement || pipe?.routeReady === false) return
+    if (stage !== 'graduated' || tk === null || !addresses.settlement) return
     const settle = addresses.settlement
     const ticketId = tk
+    if (abortDue) {
+      try {
+        await pub.simulateContract({ address: settle, abi: abis.settlement, functionName: 'abort', args: [ticketId], account: wallet.account ?? L.creator })
+        const b = h('button', { class: 'btn', type: 'button', 'data-act': 'abort' }, `abort(${ticketId}) · return assets to the pool`)
+        b.addEventListener('click', async () => {
+          b.setAttribute('disabled', '')
+          try { const tx = await send({ address: settle, abi: abis.settlement, functionName: 'abort', args: [ticketId] }); await mined(tx); toast('Aborted · trading reopened · tx ' + short(tx)); await refresh(); await refreshPipe() }
+          catch (e) { toast(errMsg(e), false, 9000) } finally { b.removeAttribute('disabled') }
+        })
+        trackAct.append(b)
+      } catch (e) {
+        trackAct.append(h('details', { class: 'hint' }, h('summary', null, 'Abort simulation failed'), h('p', { style: 'margin:6px 0 0' }, errMsg(e))))
+      }
+    }
+    if (pipe?.routeReady === false) return
     try {
       await pub.simulateContract({ address: settle, abi: abis.settlement, functionName: 'dispatch', args: [ticketId], account: wallet.account ?? L.creator })
-      const b = h('button', { class: 'btn', type: 'button' }, `dispatch(${ticketId})`)
+      const b = h('button', { class: 'btn', type: 'button', 'data-act': 'dispatch' }, `dispatch(${ticketId})`)
       b.addEventListener('click', async () => {
         b.setAttribute('disabled', '')
         try { const tx = await send({ address: settle, abi: abis.settlement, functionName: 'dispatch', args: [ticketId] }); await mined(tx); toast('Dispatched · tx ' + short(tx)); await refreshPipe() }
@@ -409,8 +464,8 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
     if (alive()) { paint(); paintClosed(); paintTrack() }
   }
   async function refreshPipe() {
-    if (!st?.graduated) return
-    try { pipe = await fetchPipeline(L, st); if (alive()) { paint(); paintTrack() } } catch { /* keep last */ }
+    if (st?.ticketId == null) return
+    try { pipe = await fetchPipeline(L, st); if (alive()) { paint(); paintClosed(); paintTrack() } } catch { /* keep last */ }
   }
 
   /* ---- tape: incremental Trade logs, deduplicated by tx + log index ---- */

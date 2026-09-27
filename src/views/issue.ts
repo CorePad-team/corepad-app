@@ -6,6 +6,28 @@ import { notDeployed, footer } from './common'
 
 const V_TOKEN0 = 1_073_000_000n * 10n ** 18n
 const CREATOR_CAP = SUPPLY / 50n // 2 %
+const nameBytes = (n: string) => new TextEncoder().encode(n).length
+/** Client-side mirror of CorePadToken's name rule: 1–31 UTF-8 bytes, no NUL. Null when valid. */
+function nameProblem(n: string): string | null {
+  if (!n) return null
+  const b = nameBytes(n)
+  if (b > 31) return `Name is ${b} bytes; the limit is 31 bytes (UTF-8: accented letters and emoji take 2–4 bytes each).`
+  if (n.includes('\u0000')) return 'Name cannot contain a NUL character.'
+  return null
+}
+/** Symbol availability from the factory (unique across CorePad + reserved tickers). Null when free. */
+async function symbolProblem(sy: string): Promise<string | null> {
+  if (!addresses.factory) return null
+  if (firstFn(abis.factory, 'isReservedSymbol')) {
+    const reserved = await pub.readContract({ address: addresses.factory, abi: abis.factory, functionName: 'isReservedSymbol', args: [sy] }) as boolean
+    if (reserved) return `${sy} is a reserved ticker (a major HyperCore asset) and cannot be launched.`
+  }
+  if (firstFn(abis.factory, 'launchOfSymbol')) {
+    const id = await pub.readContract({ address: addresses.factory, abi: abis.factory, functionName: 'launchOfSymbol', args: [sy] }) as bigint
+    if (id > 0n) return `${sy} is already taken by launch #${id}. Symbols are unique across CorePad (the HyperCore ticker is the symbol).`
+  }
+  return null
+}
 
 export function renderIssue(root: HTMLElement) {
   root.append(h('header', { class: 'pagehead' },
@@ -15,6 +37,7 @@ export function renderIssue(root: HTMLElement) {
   ))
 
   const name = h('input', { maxlength: '31', autocomplete: 'off', placeholder: 'Token name', 'aria-label': 'Name', required: true }) as HTMLInputElement
+  const nameCount = h('span', { 'data-namebytes': '' }, '0 / 31 bytes')
   const sym = h('input', { maxlength: '6', autocomplete: 'off', placeholder: 'SYMBOL', 'aria-label': 'Symbol', required: true, style: 'text-transform:uppercase' }) as HTMLInputElement
   const buy = h('input', { inputmode: 'decimal', autocomplete: 'off', placeholder: '0.0', 'aria-label': 'Creator buy in HYPE' }) as HTMLInputElement
   const buyHint = h('span', { class: 'hint' }, 'Optional. Leave empty for no creator buy.')
@@ -24,7 +47,7 @@ export function renderIssue(root: HTMLElement) {
   const simNote = h('p', { class: 'hint', style: 'margin:0' }, DEPLOYED ? 'Fill in name and symbol; the transaction is simulated before you can sign.' : '')
 
   const form = h('form', { novalidate: true, id: 'issue-form', class: 'fields' },
-    h('div', { class: 'field' }, h('label', { class: 'flabel', for: 'f-name' }, h('span', null, 'Name'), h('span', null, '1–31 bytes')), h('div', { class: 'input' }, Object.assign(name, { id: 'f-name' }))),
+    h('div', { class: 'field' }, h('label', { class: 'flabel', for: 'f-name' }, h('span', null, 'Name'), nameCount), h('div', { class: 'input' }, Object.assign(name, { id: 'f-name' }))),
     h('div', { class: 'field' }, h('label', { class: 'flabel', for: 'f-sym' }, h('span', null, 'Symbol'), h('span', null, 'A–Z 0–9 · 1–6')), h('div', { class: 'input' }, Object.assign(sym, { id: 'f-sym' }))),
     h('div', { class: 'field' }, h('label', { class: 'flabel', for: 'f-buy' }, h('span', null, 'Creator buy · optional'), h('span', null, 'cap 2 %')), h('div', { class: 'input' }, Object.assign(buy, { id: 'f-buy' }), h('span', { class: 'unit' }, 'HYPE')), buyHint),
     h('p', { class: 'note', style: 'margin:0' }, 'Two separate limits. Creator-buy cap: 2 % of supply (LaunchPool.CREATOR_MAX), any excess HYPE refunded. Launch guard: the creator buy is then counted in your cumulative guard allowance (1 % per address for 60 s), so any further buy from this address in that window reverts (GuardExceeded); it is not clipped. The estimate below is checked by simulating launch() against the connected contracts.'),
@@ -84,6 +107,9 @@ export function renderIssue(root: HTMLElement) {
     pSym.textContent = s || (name.value.trim() ? 'SYMBOL' : 'Enter token metadata')
     pSym.className = s ? '' : 'empty-id'
     pName.textContent = name.value.trim()
+    const nb = nameBytes(name.value.trim())
+    nameCount.textContent = `${nb} / 31 bytes`
+    nameCount.style.color = nb > 31 ? 'var(--warn, inherit)' : ''
     scheduleSim()
     if (G) {
       const vH = (G * 273n) / 800n
@@ -110,8 +136,13 @@ export function renderIssue(root: HTMLElement) {
     if (!DEPLOYED || !addresses.factory) return
     const n = name.value.trim(), sy = sym.value.trim(), b = buyWei()
     if (!n || !sy) { simNote.textContent = 'Fill in name and symbol; the transaction is simulated before you can sign.'; return }
+    const np = nameProblem(n)
+    if (np) { simNote.textContent = np; return }
     if (b === 'bad') { simNote.textContent = 'Creator buy: invalid amount.'; return }
     try {
+      const sp = await symbolProblem(sy)
+      if (seq !== simSeq) return
+      if (sp) { simNote.textContent = sp; return }
       const withBuy = Boolean(wallet.account) || !b
       await pub.simulateContract({ address: addresses.factory, abi: abis.factory, functionName: 'launch', value: withBuy ? (b ?? 0n) : 0n,
         args: argsFor(abis.factory, 'launch', { name: n, symbol: sy, minTokensOut: 0n }), account: wallet.account ?? addresses.factory })
@@ -127,8 +158,12 @@ export function renderIssue(root: HTMLElement) {
     e.preventDefault()
     err.textContent = ''
     const n = name.value.trim(), s = sym.value.trim()
-    if (!n || new TextEncoder().encode(n).length > 31) { err.textContent = 'Name: 1–31 bytes (stored on-chain as immutable metadata).'; name.focus(); return }
+    if (!n) { err.textContent = 'Name: 1–31 bytes (stored on-chain as immutable metadata).'; name.focus(); return }
+    const np = nameProblem(n)
+    if (np) { err.textContent = np; name.focus(); return }
     if (!/^[A-Z0-9]{1,6}$/.test(s)) { err.textContent = 'Symbol: 1–6 characters, A–Z and 0–9 (CorePadToken.isValidSymbol).'; sym.focus(); return }
+    try { const sp = await symbolProblem(s); if (sp) { err.textContent = sp; sym.focus(); return } }
+    catch (e) { err.textContent = 'Could not check symbol availability: ' + errMsg(e); return }
     const b = buyWei()
     if (b === 'bad') { err.textContent = 'Creator buy: invalid amount.'; buy.focus(); return }
     const value = b ?? 0n
@@ -141,7 +176,8 @@ export function renderIssue(root: HTMLElement) {
     if (!addresses.factory) return
     submit.setAttribute('disabled', ''); submit.textContent = 'Confirm in wallet…'
     try {
-      const tx = await send({ address: addresses.factory, abi: abis.factory, functionName: 'launch', value,
+      // +30 % over the estimate: launch deploys two contracts and forwards a fixed gas stipend to the bridge factory
+      const tx = await send({ address: addresses.factory, abi: abis.factory, functionName: 'launch', value, gasBufferPct: 30,
         args: argsFor(abis.factory, 'launch', { name: n, symbol: s, minTokensOut: minOut, minOut }) })
       submit.textContent = 'Waiting for block…'
       const rc = await mined(tx)

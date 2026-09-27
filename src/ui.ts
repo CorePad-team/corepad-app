@@ -71,14 +71,31 @@ export function toast(msg: string, bad = false, ms = 6000) {
   clearTimeout(toastTimer)
   toastTimer = window.setTimeout(() => el!.classList.remove('show'), ms)
 }
+/** Readable text for the protocol's custom errors (decoded from the ABI by viem). */
+const HUMAN: Record<string, (args: readonly unknown[]) => string> = {
+  InvalidName: () => 'Name must be 1–31 bytes (UTF-8), with no NUL character.',
+  InvalidSymbol: () => 'Symbol must be 1–6 characters, A–Z and 0–9.',
+  SymbolTaken: (a) => `This symbol is already used by launch #${String(a[0])}. Symbols are unique across CorePad.`,
+  SymbolReserved: () => 'This symbol is reserved (a major HyperCore ticker) and cannot be launched.',
+  GuardExceeded: (a) => `Launch guard: this buy would take your address past ${a[0] !== undefined ? String(a[0]) : 'the'} token-wei cap for the guard window.`,
+  Slippage: () => 'Price moved beyond your slippage limit.',
+  Expired: () => 'Deadline passed before the transaction was included.',
+  PoolFrozen: () => 'The curve is closed: no buy or sell until the pool reopens.',
+  ZeroOut: () => 'This amount buys or sells nothing at the current price (curve sold out or dust).',
+  TooEarly: (a) => `Too early: possible from ${a[0] !== undefined ? new Date(Number(a[0]) * 1000).toISOString().replace('.000Z', 'Z') : 'later'}.`,
+  BridgeWalletOutOfGas: () => 'Gas limit too low for the bridge wallet step; retry with a higher gas limit.',
+  RouteNotReady: () => 'The HyperEVM mirror is not registered yet (route not ready).',
+}
 export function errMsg(e: unknown): string {
   const x = e as { shortMessage?: string; message?: string; walk?: (f: (c: unknown) => boolean) => unknown }
   const base = (x?.shortMessage || x?.message || String(e)).split('\n')[0]
   // viem keeps the decoded custom error (GuardExceeded, Slippage, …) on the cause, not in shortMessage
   const rev = x?.walk?.((c) => (c as { name?: string })?.name === 'ContractFunctionRevertedError') as
     { data?: { errorName?: string; args?: readonly unknown[] }; reason?: string; signature?: string } | undefined
-  const why = rev?.data?.errorName
-    ? rev.data.errorName + (rev.data.args?.length ? '(' + rev.data.args.map(String).join(', ') + ')' : '')
+  const name = rev?.data?.errorName
+  if (name && HUMAN[name]) return `${HUMAN[name](rev?.data?.args ?? [])} (${name})`.slice(0, 240)
+  const why = name
+    ? name + (rev?.data?.args?.length ? '(' + rev.data.args.map(String).join(', ') + ')' : '')
     : rev?.reason ?? rev?.signature
   return (why && !base.includes(why) ? `${base} ${why}` : base).slice(0, 240)
 }

@@ -112,7 +112,9 @@ export async function poolState(pool: Address): Promise<PoolState> {
   const price = virtualToken > 0n ? Number(formatEther(virtualHype)) / Number(formatEther(virtualToken)) : 0
   const progress = Math.min(1, Number((s * 1_000_000n) / FOR_SALE) / 1_000_000)
   return {
-    virtualHype, virtualToken, sold: s, raised, target, graduated: Boolean(grad), frozen: Boolean(grad || frozen || s >= FOR_SALE), price, progress,
+    virtualHype, virtualToken, sold: s, raised, target, graduated: Boolean(grad),
+    // the pool's own flag: after an abort a sold-out curve is OPEN again (sells allowed), so sold >= 800 M is not 'frozen'
+    frozen: Boolean(grad || (frozen ?? s >= FOR_SALE)), price, progress,
     launchedAt, guardSeconds, guardMax, guardActive, ticketId: ticketId && ticketId > 0n ? ticketId : null,
     hypeToGraduate: toGrad, tickerReserve,
   }
@@ -126,15 +128,19 @@ export async function poolStates(pools: Address[]): Promise<Map<Address, PoolSta
 
 /* ---------- Quotes: on-chain when the pool exposes them, else the SPEC curve math ---------- */
 const FEE_BPS = 100n
-export async function quoteBuy(pool: Address, st: PoolState, hypeIn: bigint): Promise<{ out: bigint; fee: bigint; clipped: boolean }> {
+/** `refund` is the HYPE the pool sends back on a clipped (graduation-crossing) buy; `spent` = hypeIn − refund. */
+export type BuyQuote = { out: bigint; fee: bigint; refund: bigint; spent: bigint; clipped: boolean }
+export async function quoteBuy(pool: Address, st: PoolState, hypeIn: bigint): Promise<BuyQuote> {
   const fn = firstFn(abis.pool, 'quoteBuy', 'getBuyQuote', 'previewBuy')
   if (fn) {
     try {
       const r = await pub.readContract({ address: pool, abi: abis.pool, functionName: fn, args: [hypeIn] }) as bigint | readonly bigint[]
-      if (typeof r === 'bigint') return { out: r, fee: (hypeIn * FEE_BPS) / 10_000n, clipped: false }
-      return { out: r[0], fee: r[1] ?? 0n, clipped: (r[2] ?? 0n) > 0n }
+      if (typeof r === 'bigint') return { out: r, fee: (hypeIn * FEE_BPS) / 10_000n, refund: 0n, spent: hypeIn, clipped: false }
+      const refund = r[2] ?? 0n
+      return { out: r[0], fee: r[1] ?? 0n, refund, spent: hypeIn - refund, clipped: refund > 0n }
     } catch { /* fall through to local math */ }
   }
+  // Local fallback without the exact clip math: no refund is assumed, the buy is only flagged.
   const fee = (hypeIn * FEE_BPS) / 10_000n
   const net = hypeIn - fee
   const k = st.virtualHype * st.virtualToken
@@ -142,7 +148,7 @@ export async function quoteBuy(pool: Address, st: PoolState, hypeIn: bigint): Pr
   const left = FOR_SALE - st.sold
   const clipped = out > left
   if (clipped) out = left
-  return { out, fee, clipped }
+  return { out, fee, refund: 0n, spent: hypeIn, clipped }
 }
 export async function quoteSell(pool: Address, st: PoolState, tokensIn: bigint): Promise<{ out: bigint; fee: bigint }> {
   const fn = firstFn(abis.pool, 'quoteSell', 'getSellQuote', 'previewSell')
@@ -180,22 +186,27 @@ export async function fetchTrades(pool: Address, from: bigint, to: bigint): Prom
 }
 
 /* ---------- Pipeline (Settlement) ---------- */
-export type Stage = 'absorption' | 'graduated' | 'dispatched' | 'confirmed' | 'rescued'
+/** `aborted`: the ticket was aborted after rescueDelay, its assets went back to the pool and trading reopened. */
+export type Stage = 'absorption' | 'graduated' | 'dispatched' | 'confirmed' | 'aborted'
 export type Pipeline = {
   stage: Stage; ticket: bigint | null; listPrice: bigint | null; hype: bigint | null; tokens: bigint | null
   coreTokenIndex: bigint | null; spotPairIndex: bigint | null; graduatedTx: Hash | null; dispatchedTx: Hash | null; confirmedTx: Hash | null
+  abortedTx: Hash | null
+  /** Settlement.abortableAt(id): unix seconds from which anyone can abort an open ticket (null when not open). */
+  abortableAt: bigint | null
   /** adapter.isRouteReady(token): the HyperEVM mirror is registered and routed. null = could not be read */
   routeReady: boolean | null; mirror: Address | null
 }
-const STATES = ['none', 'open', 'dispatched', 'confirmed', 'rescued'] as const
+const STATES = ['none', 'open', 'dispatched', 'confirmed', 'aborted'] as const
 /**
  * Ticket state from Settlement.getTicket (source of truth), tx hashes from its events.
- * Settlement.State: None, Open, Dispatched, Confirmed, Rescued.
+ * Settlement.State: None, Open, Dispatched, Confirmed, Aborted. The pool keeps its latest ticket id,
+ * so an aborted ticket stays readable while the curve trades again.
  */
 export async function fetchPipeline(launch: Launch, st: PoolState): Promise<Pipeline> {
-  const p: Pipeline = { stage: st.graduated ? 'graduated' : 'absorption', ticket: null, listPrice: null, hype: null, tokens: null, coreTokenIndex: null, spotPairIndex: null, graduatedTx: null, dispatchedTx: null, confirmedTx: null, routeReady: null, mirror: null }
+  const p: Pipeline = { stage: st.graduated ? 'graduated' : 'absorption', ticket: null, listPrice: null, hype: null, tokens: null, coreTokenIndex: null, spotPairIndex: null, graduatedTx: null, dispatchedTx: null, confirmedTx: null, abortedTx: null, abortableAt: null, routeReady: null, mirror: null }
   const settle = addresses.settlement
-  if (!settle || !st.graduated || st.ticketId === null) return p
+  if (!settle || st.ticketId === null) return p
   const id = st.ticketId
   p.ticket = id
   const t = await pub.readContract({ address: settle, abi: abis.settlement, functionName: 'getTicket', args: [id] }) as Record<string, unknown>
@@ -203,9 +214,10 @@ export async function fetchPipeline(launch: Launch, st: PoolState): Promise<Pipe
   const state = STATES[Number(t.state)] ?? 'none'
   if (state === 'dispatched') p.stage = 'dispatched'
   if (state === 'confirmed') { p.stage = 'confirmed'; p.coreTokenIndex = BigInt(t.coreTokenIndex as bigint); p.spotPairIndex = BigInt(t.spotPairIndex as bigint) }
-  if (state === 'rescued') p.stage = 'rescued'
+  if (state === 'aborted') p.stage = st.graduated ? 'graduated' : 'aborted'
   if (t.mirror && t.mirror !== '0x0000000000000000000000000000000000000000') p.mirror = t.mirror as Address
   if (state === 'open') {
+    try { p.abortableAt = await pub.readContract({ address: settle, abi: abis.settlement, functionName: 'abortableAt', args: [id] }) as bigint } catch { p.abortableAt = null }
     try {
       const adapter = await pub.readContract({ address: settle, abi: abis.settlement, functionName: 'adapter' }) as Address
       p.routeReady = await pub.readContract({ address: adapter, abi: abis.adapter, functionName: 'isRouteReady', args: [launch.token] }) as boolean
@@ -222,6 +234,7 @@ export async function fetchPipeline(launch: Launch, st: PoolState): Promise<Pipe
   p.graduatedTx = await txOf('Graduated')
   if (p.stage === 'dispatched' || p.stage === 'confirmed') p.dispatchedTx = await txOf('Dispatched')
   if (p.stage === 'confirmed') p.confirmedTx = await txOf('Confirmed')
+  if (p.stage === 'aborted') p.abortedTx = await txOf('Aborted')
   return p
 }
 
@@ -293,10 +306,20 @@ export async function mined(hash: Hash) {
   return rc
 }
 
-export async function send(req: { address: Address; abi: Abi; functionName: string; args: unknown[]; value?: bigint }): Promise<Hash> {
+/**
+ * Simulate, then send. `gasBufferPct` adds headroom on top of the node's estimate (the wallet would
+ * otherwise sign the exact estimate, which leaves no margin if state moves before inclusion).
+ */
+export async function send(req: { address: Address; abi: Abi; functionName: string; args: unknown[]; value?: bigint; gasBufferPct?: number }): Promise<Hash> {
   if (!wallet.client || !wallet.account) await wallet.connect()
   await wallet.ensureChain()
+  const { gasBufferPct, ...call } = req
   // simulate first so a revert surfaces as a readable error before the wallet prompt
-  const { request } = await pub.simulateContract({ ...req, account: wallet.account! } as Parameters<typeof pub.simulateContract>[0])
-  return wallet.client!.writeContract({ ...(request as Parameters<WalletClient['writeContract']>[0]), account: wallet.account!, chain: ELYSIUM })
+  const { request } = await pub.simulateContract({ ...call, account: wallet.account! } as Parameters<typeof pub.simulateContract>[0])
+  let gas: bigint | undefined
+  if (gasBufferPct) {
+    const est = await pub.estimateContractGas({ ...call, account: wallet.account! } as Parameters<typeof pub.estimateContractGas>[0])
+    gas = (est * BigInt(100 + gasBufferPct)) / 100n
+  }
+  return wallet.client!.writeContract({ ...(request as Parameters<WalletClient['writeContract']>[0]), account: wallet.account!, chain: ELYSIUM, ...(gas ? { gas } : {}) })
 }

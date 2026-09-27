@@ -78,7 +78,7 @@ export function renderHome(root: HTMLElement) {
         h('p', null, 'Three stages, each with its executor and its real constraint. The one off-chain step is a deterministic keeper, and it exists because HyperCore listings cannot be signed by a contract yet. ', h('a', { href: '#/manual' }, 'Full mechanics in the Manual.')))),
     list,
     h('div', { class: 'notes' },
-      h('div', null, h('h4', null, 'Open-ticket rescue'), h('p', null, 'After ', code('rescueDelay'), ' (7 days), the immutable treasury can rescue a ticket that was never dispatched. Dispatched assets are outside this rescue path.')),
+      h('div', null, h('h4', null, 'Abort → trading reopens'), h('p', null, 'If a ticket is not dispatched within ', code('rescueDelay'), ' (7 days) of graduation, anyone can ', code('abort(id)'), ': the HYPE and book tokens go back to the pool and the curve reopens where it stopped, so holders can sell. The treasury receives nothing from an abort.')),
       h('div', null, h('h4', null, 'CoreWriter lane · not live'), h('p', null, 'The future ', code('ICoreWriterAdapter'), ' slot on Settlement is unused in v0. Its eventual scope depends on the interface Elysium publishes.')),
     )))
 
