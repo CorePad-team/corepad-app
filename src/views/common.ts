@@ -14,10 +14,11 @@ export function notDeployed(what = 'Live data'): HTMLElement {
 
 export function footer(): HTMLElement {
   return h('footer', { class: 'foot' },
-    h('span', null, 'CorePad v0 · target Elysium testnet 99801'),
+    h('span', null, 'CorePad v0 · deployed on Elysium testnet 99801'),
     h('nav', null,
       h('a', { href: 'https://elysium.kinetiq.xyz/testnet-explorer', target: '_blank', rel: 'noopener' }, NET.explorer + ' ↗'),
       h('a', { href: 'https://elysium.kinetiq.xyz/testnet-bridge', target: '_blank', rel: 'noopener' }, NET.bridge + ' ↗'),
+      h('a', { href: 'https://x.com/CorePad_hl', target: '_blank', rel: 'noopener' }, 'X @CorePad_hl ↗'),
       h('a', { href: '#/manual' }, 'Manual'),
     ),
   )

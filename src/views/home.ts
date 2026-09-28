@@ -41,7 +41,7 @@ export function renderHome(root: HTMLElement) {
   const zone = h('div', { class: 'fieldzone', role: 'img', 'aria-label': 'Parallel rails rise into relief, then settle flat: the launch absorbed, then the order book.' }, canvas, dot)
   root.append(
     h('section', { class: 'hero', 'aria-label': 'CorePad' },
-      h('span', { class: 'label' }, 'Target route · Elysium → HyperCore'),
+      h('span', { class: 'label' }, (DEPLOYED ? 'Live on Elysium testnet · ' : '') + 'Elysium → HyperCore'),
       h('h1', null, 'Absorb. Graduate. Settle.'),
       h('p', { class: 'tag' }, TAGLINE),
       h('div', { class: 'cta' },
