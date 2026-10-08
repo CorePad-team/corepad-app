@@ -1,6 +1,6 @@
 import './style.css'
 import { h, short, toast, errMsg } from './ui'
-import { pub, wallet } from './chain'
+import { pub, wallet, fetchLaunches } from './chain'
 import { ELYSIUM, ENVIRONMENT } from './config'
 import { BRAND } from './brand'
 import { renderHome } from './views/home'
@@ -10,18 +10,18 @@ import { renderIssue } from './views/issue'
 import { renderManual } from './views/manual'
 
 type View = (root: HTMLElement, arg: string) => (() => void) | void
-const routes: { key: string; n: string; t: string; s: string; view: View }[] = [
-  { key: '', n: '00', t: 'Field', s: 'overview', view: renderHome },
-  { key: 'ladder', n: '01', t: 'Ladder', s: 'launches', view: renderLadder },
-  { key: 'issue', n: '02', t: 'Issue', s: 'create', view: renderIssue },
-  { key: 'manual', n: '03', t: 'Manual', s: 'docs', view: renderManual },
+const routes: { key: string; t: string; view: View }[] = [
+  { key: '', t: 'Home', view: renderHome },
+  { key: 'ladder', t: 'Launches', view: renderLadder },
+  { key: 'issue', t: 'Issue', view: renderIssue },
+  { key: 'manual', t: 'Manual', view: renderManual },
 ]
 
 const app = document.getElementById('app')!
 
 function brandEl() {
   const a = h('a', { class: 'brand', href: '#/', 'aria-label': 'CorePad home' })
-  if (BRAND.lockup) a.append(h('img', { src: BRAND.lockup, alt: 'CorePad', height: '28' }))
+  if (BRAND.lockup) a.append(h('img', { src: BRAND.lockup, alt: 'CorePad', height: '26' }))
   else {
     if (BRAND.mark) a.append(h('img', { src: BRAND.mark, alt: '', height: '22' }))
     a.append(h('span', { class: 'wordmark' }, 'CorePad'))
@@ -29,40 +29,48 @@ function brandEl() {
   return a
 }
 
-function indexList() {
-  const ul = h('ul', { class: 'index' })
-  for (const r of routes) {
-    ul.append(h('li', null, h('a', { href: '#/' + r.key, 'data-key': r.key },
-      h('span', { class: 'n' }, r.n), h('span', { class: 't' }, r.t), h('span', { class: 's' }, r.s))))
-  }
-  return ul
+function navLinks(cls: string) {
+  return h('nav', { class: cls, 'aria-label': 'Sections' },
+    ...routes.filter((r) => r.key !== 'issue').map((r) => h('a', { href: '#/' + r.key, 'data-key': r.key }, r.t)))
 }
 
-function railFoot() {
-  const blk = h('span', { class: 'num', 'data-blk': '' }, '—')
-  const net = h('div', { class: 'net' },
-    h('div', { class: 'row' }, h('span', null, 'target'), h('b', null, 'Elysium ' + ELYSIUM.id)),
-    h('div', { class: 'row' }, h('span', null, 'last block read'), h('b', null, blk)),
-    h('div', { class: 'row' }, h('span', null, 'data'), h('b', null, ENV_SHORT)),
-  )
-  const btn = h('button', { class: 'btn wide', 'data-wallet': '' }, 'Connect wallet')
+/** Search box: filters the Launches table; Enter on an exact ticker, id or address opens that launch. */
+function searchBox() {
+  const input = h('input', { type: 'search', placeholder: 'Search ticker, name or address', 'aria-label': 'Search launches', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement
+  const wrap = h('label', { class: 'search' }, h('span', { class: 'sic', 'aria-hidden': 'true' }), input, h('kbd', { 'aria-hidden': 'true' }, '/'))
+  input.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return
+    const q = input.value.trim()
+    if (!q) return
+    try {
+      const list = await fetchLaunches()
+      const s = q.toLowerCase().replace(/^#/, '')
+      const hit = list.find((l) => l.symbol.toLowerCase() === s || String(l.id) === s || l.token.toLowerCase() === s || l.pool.toLowerCase() === s)
+      location.hash = hit ? `#/launch/${hit.id}` : `#/ladder/${encodeURIComponent(q)}`
+    } catch { location.hash = `#/ladder/${encodeURIComponent(q)}` }
+    input.blur()
+  })
+  return { wrap, input }
+}
+
+function walletBtn(cls = 'btn') {
+  const btn = h('button', { class: cls, 'data-wallet': '' }, 'Connect wallet')
   btn.addEventListener('click', async () => {
     try {
       if (!wallet.account) await wallet.connect()
       if (wallet.chainId !== ELYSIUM.id) await wallet.ensureChain()
     } catch (e) { toast(errMsg(e), true) }
   })
-  return h('div', { class: 'railfoot' }, net, xLink('xrow'), ghLink('xrow ghrow'), btn)
+  return btn
+}
+
+function netChip() {
+  return h('span', { class: 'chip', title: 'Network and last block read' },
+    h('i', { class: 'live', 'aria-hidden': 'true' }), h('span', null, 'Elysium ' + ELYSIUM.id), h('span', { class: 'n blk', 'data-blk': '' }, '—'))
 }
 
 export const X_URL = 'https://x.com/CorePad_hl'
 export const GITHUB_URL = 'https://github.com/CorePad-team'
-function ghLink(cls: string) {
-  return h('a', { class: cls, href: GITHUB_URL, target: '_blank', rel: 'noopener', 'aria-label': 'CorePad on GitHub' }, h('span', null, 'GitHub'), h('b', null, 'CorePad-team ↗'))
-}
-function xLink(cls: string) {
-  return h('a', { class: cls, href: X_URL, target: '_blank', rel: 'noopener', 'aria-label': 'CorePad on X' }, h('span', null, 'X'), h('b', null, '@CorePad_hl ↗'))
-}
 
 const ENV_SHORT = ENVIRONMENT === 'testnet' ? 'testnet' : ENVIRONMENT === 'local-rehearsal' ? 'local rehearsal' : 'pre-deployment'
 
@@ -70,31 +78,44 @@ const ENV_SHORT = ENVIRONMENT === 'testnet' ? 'testnet' : ENVIRONMENT === 'local
 function provenance() {
   if (ENVIRONMENT === 'testnet') return h('div', { class: 'prov testnet', role: 'note' },
     h('b', null, 'TESTNET'),
-    h('span', null, 'CorePad is deployed on Elysium testnet (chain 99801). Tokens and HYPE here have no value. Mainnet is not live yet.'),
+    h('span', null, 'CorePad runs on Elysium testnet (chain 99801). Tokens and HYPE here have no value.'),
     h('a', { href: 'https://elysium.kinetiq.xyz/testnet-faucet', target: '_blank', rel: 'noopener' }, 'Testnet HYPE faucet ↗'))
   if (ENVIRONMENT === 'local-rehearsal') return h('div', { class: 'prov', role: 'note' }, h('b', null, 'LOCAL REHEARSAL'), h('span', null, 'Real contract execution on a local node. Not Elysium testnet.'))
   return h('div', { class: 'prov', role: 'note' }, h('b', null, 'PRE-DEPLOYMENT'), h('span', null, 'No CorePad testnet deployment yet. Nothing on this site is live data.'))
 }
 
-// ---- shell (built once) ----
-const rail = h('nav', { class: 'rail', 'aria-label': 'Index' }, brandEl(), indexList(), railFoot())
-const drawer = h('div', { class: 'drawer', id: 'drawer' }, indexList(), railFoot())
-const idxBtn = h('button', { class: 'idx', 'aria-expanded': 'false', 'aria-controls': 'drawer' }, 'Index')
-idxBtn.addEventListener('click', () => {
+// ---- shell (built once): top bar, mobile drawer, stage ----
+const desk = searchBox()
+const mob = searchBox()
+const drawer = h('div', { class: 'drawer', id: 'drawer' },
+  mob.wrap, navLinks('dnav'),
+  h('a', { class: 'btn solid wide', href: '#/issue' }, '+ Issue a launch'),
+  walletBtn('btn wide'),
+  h('div', { class: 'dfoot' }, netChip(),
+    h('a', { href: X_URL, target: '_blank', rel: 'noopener' }, 'X @CorePad_hl ↗'),
+    h('a', { href: GITHUB_URL, target: '_blank', rel: 'noopener' }, 'GitHub ↗')))
+const menuBtn = h('button', { class: 'menu', 'aria-expanded': 'false', 'aria-controls': 'drawer', type: 'button' }, 'Menu')
+menuBtn.addEventListener('click', () => {
   const open = !drawer.classList.contains('open')
   drawer.classList.toggle('open', open)
-  idxBtn.setAttribute('aria-expanded', String(open))
-  idxBtn.textContent = open ? 'Close' : 'Index'
+  menuBtn.setAttribute('aria-expanded', String(open))
+  menuBtn.textContent = open ? 'Close' : 'Menu'
 })
-const topbar = h('header', { class: 'topbar' }, brandEl(), h('span', { class: 'envtag' }, ENV_SHORT), h('a', { class: 'xtop', href: X_URL, target: '_blank', rel: 'noopener', 'aria-label': 'CorePad on X (@CorePad_hl)' }, 'X ↗'), idxBtn)
+const topnav = h('header', { class: 'topnav' },
+  h('div', { class: 'tn' },
+    brandEl(), h('span', { class: 'envtag' }, ENV_SHORT), navLinks('tnav'), desk.wrap,
+    h('div', { class: 'tright' }, netChip(), h('a', { class: 'btn solid tissue', href: '#/issue' }, '+ Issue a launch'), walletBtn('btn wbtn'), menuBtn)))
 const stage = h('main', { class: 'stage', id: 'stage' })
-app.append(h('div', { class: 'frame' }, rail, h('div', { class: 'main-col' }, topbar, drawer, provenance(), stage)))
+app.append(h('div', { class: 'frame' }, topnav, drawer, provenance(), stage))
+document.addEventListener('keydown', (e) => {
+  if (e.key === '/' && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); desk.input.focus() }
+})
 
 function paintWallet() {
   document.querySelectorAll<HTMLButtonElement>('[data-wallet]').forEach((b) => {
-    if (!wallet.account) { b.textContent = wallet.available() ? 'Connect wallet' : 'No wallet detected'; b.className = 'btn wide' }
-    else if (wallet.chainId !== ELYSIUM.id) { b.textContent = 'Wrong network · switch to 99801'; b.className = 'btn wide' }
-    else { b.textContent = short(wallet.account) + ' · 99801'; b.className = 'btn wide' }
+    if (!wallet.account) b.textContent = wallet.available() ? 'Connect wallet' : 'No wallet detected'
+    else if (wallet.chainId !== ELYSIUM.id) b.textContent = 'Switch to 99801'
+    else b.textContent = short(wallet.account)
   })
 }
 wallet.listeners.add(paintWallet)
@@ -116,15 +137,16 @@ setInterval(tickBlock, 3000)
 let cleanup: (() => void) | void
 function route() {
   const hash = location.hash.replace(/^#\/?/, '')
-  const [head, arg = ''] = hash.split('/')
+  const [head, ...rest] = hash.split('/')
+  const arg = rest.join('/')
   if (typeof cleanup === 'function') cleanup()
   stage.replaceChildren()
-  drawer.classList.remove('open'); idxBtn.setAttribute('aria-expanded', 'false'); idxBtn.textContent = 'Index'
+  drawer.classList.remove('open'); menuBtn.setAttribute('aria-expanded', 'false'); menuBtn.textContent = 'Menu'
   let key = head
   let view: View
   if (head === 'launch') { view = renderLaunch; key = 'ladder' }
   else view = (routes.find((r) => r.key === head) ?? routes[0]).view
-  document.querySelectorAll<HTMLAnchorElement>('.index a').forEach((a) => {
+  document.querySelectorAll<HTMLAnchorElement>('.tnav a, .dnav a').forEach((a) => {
     if (a.dataset.key === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current')
   })
   const r = routes.find((x) => x.key === key)

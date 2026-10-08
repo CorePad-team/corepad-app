@@ -12,7 +12,7 @@ const DEADLINES = [2, 5, 20]
 
 export function renderLaunch(root: HTMLElement, arg: string) {
   if (!DEPLOYED) {
-    root.append(h('header', { class: 'pagehead' }, h('span', { class: 'label' }, '01 · Ladder · launch ' + (arg || '—')), h('h1', null, 'Launch')), notDeployed('This launch'), footer())
+    root.append(h('header', { class: 'pagehead' }, h('span', { class: 'label' }, 'Launches · #' + (arg || '—')), h('h1', null, 'Launch')), notDeployed('This launch'), footer())
     return
   }
   let alive = true
@@ -47,7 +47,7 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
   /* ---- identity ---- */
   const staleTag = h('span', { class: 'stale' })
   root.append(h('header', { class: 'lhead' },
-    h('span', { class: 'label' }, `01 · Ladder · level ${String(L.id).padStart(3, '0')} `, staleTag),
+    h('span', { class: 'label' }, h('a', { href: '#/ladder', style: 'color:inherit;text-decoration:none' }, '← Launches'), ` · #${String(L.id).padStart(3, '0')} `, staleTag),
     h('h1', null, L.symbol, h('span', null, L.name)),
     h('div', { class: 'addrs' },
       h('span', null, 'token ', ext(addrLink(L.token), short(L.token), { title: L.token })),
