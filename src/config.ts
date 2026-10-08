@@ -26,6 +26,8 @@ export const BRIDGE_CONTRACTS = {
   hyperEvmMirrorFactory: '0xcaDb9986F3727177d48FA07294E1730f9D19290b',
   elysiumRouter: '0x89659883a9d980925733B0A698F117AAb65ac718',
   hyperEvmRouter: '0x1aAE2caD8B0249905492087EF230FcCEa3707C45',
+  elysiumGateway: '0x7255150a0340852Fe4B4B5657C5AcE6c09a4F959',
+  hyperEvmOutbox: '0x87391D602aaffB3Fe8051EcCDb75d6EEe8C31060',
 } as const
 
 type Raw = Record<string, unknown>
@@ -54,6 +56,9 @@ export const addresses = {
   factory: addr('factory', 'CorePadFactory', 'corePadFactory'),
   settlement: addr('settlement', 'Settlement'),
   treasury: addr('treasury', 'Treasury'),
+  adapter: addr('ElysiumBridgeAdapter', 'adapter', 'bridgeAdapter'),
+  keeper: addr('keeper', 'Keeper'),
+  coreSettler: addr('coreSettler', 'CoreSettler'),
 }
 const sb = pick('startBlock', 'deployedAtBlock', 'deployBlock', 'fromBlock', 'blockNumber')
 export const START_BLOCK: bigint = typeof sb === 'number' || (typeof sb === 'string' && /^\d+$/.test(sb)) ? BigInt(sb) : 0n

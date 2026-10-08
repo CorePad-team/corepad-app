@@ -89,7 +89,7 @@ listPrice       = virtualHype_end / 273 M               (HYPE per token)`),
       h('h3', null, n), h('p', { class: 'hint', style: 'margin:0' }, 'Scroll horizontally'),
       h('pre', { tabindex: '0', 'aria-label': n + ' events' }, eventSigs(n === 'CorePadFactory' ? abis.factory : n === 'LaunchPool' ? abis.pool : abis.settlement).join('\n'))]))
 
-  const addrRow = (name: string, chain: string, a: string | null) => {
+  const addrRow = (name: string, chain: string, a: string | null, role?: string) => {
     const l2 = h('div', { class: 'l2' })
     if (!a) l2.append(h('span', null, 'not deployed'))
     else {
@@ -100,21 +100,31 @@ listPrice       = virtualHype_end / 273 M               (HYPE per token)`),
       const onPublicElysium = chain.startsWith('Elysium') && (ENVIRONMENT !== 'local-rehearsal' || !Object.values(addresses).includes(a as `0x${string}`))
       if (onPublicElysium) l2.append(h('a', { href: `${EXPLORER}/address/${a}`, target: '_blank', rel: 'noopener' }, 'explorer ↗'))
     }
-    return h('div', { class: 'addr-row' }, h('div', null, h('strong', { style: 'font-weight:500' }, name), h('span', { class: 'sec2' }, ' · ' + chain)), l2)
+    return h('div', { class: 'addr-row' },
+      h('div', null, h('strong', { style: 'font-weight:500' }, name), h('span', { class: 'sec2' }, ' · ' + chain),
+        role ? h('div', { class: 'hint', style: 'margin:2px 0 0' }, role) : null),
+      l2)
   }
   const here = ENVIRONMENT === 'local-rehearsal' ? 'local rehearsal node' : 'Elysium 99801'
   add('addresses', 'Contract addresses',
     h('h3', null, ENVIRONMENT === 'local-rehearsal' ? 'Connected rehearsal contracts' : 'CorePad contracts'),
     h('div', null,
-      addrRow('CorePadFactory', here, addresses.factory),
-      addrRow('Settlement', here, addresses.settlement),
-      addrRow('Treasury', here, addresses.treasury)),
+      addrRow('CorePadFactory', here, addresses.factory, 'Deploys each launch (token + pool), unique symbols, reserved tickers. No owner.'),
+      addrRow('Settlement', here, addresses.settlement, 'Holds graduated HYPE + 200 M book tokens as tickets: dispatch, confirm, abort.'),
+      addrRow('ElysiumBridgeAdapter', here, addresses.adapter, 'Stateless. Tokens through the mirror bridge, HYPE through ArbSys.withdrawEth.')),
+    h('h3', null, 'Operators'),
+    h('div', null,
+      addrRow('Treasury', here, addresses.treasury, 'Receives the 1 % trading fee and swept unaccounted surplus. Never an aborted raise.'),
+      addrRow('Keeper', here, addresses.keeper, 'Registers mirrors, dispatches, claims on HyperEVM, confirms. Testnet: one key for every role.'),
+      addrRow('coreSettler', 'HyperEVM 998', addresses.coreSettler, 'Recipient of dispatched tokens and HYPE on HyperEVM (keeper custody, audit M-3).')),
     h('h3', null, 'Target-network infrastructure references'),
     h('div', null,
-      addrRow('ElysiumBridgeFactory', 'Elysium 99801', BRIDGE_CONTRACTS.elysiumBridgeFactory),
-      addrRow('Router', 'Elysium 99801', BRIDGE_CONTRACTS.elysiumRouter),
-      addrRow('ElysiumMirrorFactory', 'HyperEVM 998', BRIDGE_CONTRACTS.hyperEvmMirrorFactory),
+      addrRow('ElysiumBridgeFactory', 'Elysium 99801', BRIDGE_CONTRACTS.elysiumBridgeFactory, 'Creates the escrow wallet of each token at launch.'),
+      addrRow('Router', 'Elysium 99801', BRIDGE_CONTRACTS.elysiumRouter, 'Routes outbound token transfers to their gateway.'),
+      addrRow('Custom gateway', 'Elysium 99801', BRIDGE_CONTRACTS.elysiumGateway, 'Gateway of registered mirrors; a dispatch needs it.'),
+      addrRow('ElysiumMirrorFactory', 'HyperEVM 998', BRIDGE_CONTRACTS.hyperEvmMirrorFactory, 'Creates and registers the HyperEVM mirror of a token.'),
       addrRow('Router', 'HyperEVM 998', BRIDGE_CONTRACTS.hyperEvmRouter),
+      addrRow('Outbox', 'HyperEVM 998', BRIDGE_CONTRACTS.hyperEvmOutbox, 'Where withdrawals from Elysium are claimed after the challenge period.'),
     ),
     p('Each launch deploys its own ', c('CorePadToken'), ' and ', c('LaunchPool'), '; their addresses are in ', c('LaunchCreated'), ' and on each launch page.'))
 
