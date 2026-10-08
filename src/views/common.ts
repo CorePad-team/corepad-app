@@ -19,6 +19,7 @@ export function footer(): HTMLElement {
       h('a', { href: 'https://elysium.kinetiq.xyz/testnet-explorer', target: '_blank', rel: 'noopener' }, NET.explorer + ' ↗'),
       h('a', { href: 'https://elysium.kinetiq.xyz/testnet-bridge', target: '_blank', rel: 'noopener' }, NET.bridge + ' ↗'),
       h('a', { href: 'https://x.com/CorePad_hl', target: '_blank', rel: 'noopener' }, 'X @CorePad_hl ↗'),
+      h('a', { href: 'https://github.com/CorePad-team', target: '_blank', rel: 'noopener' }, 'GitHub ↗'),
       h('a', { href: '#/manual' }, 'Manual'),
     ),
   )

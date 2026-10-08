@@ -52,10 +52,14 @@ function railFoot() {
       if (wallet.chainId !== ELYSIUM.id) await wallet.ensureChain()
     } catch (e) { toast(errMsg(e), true) }
   })
-  return h('div', { class: 'railfoot' }, net, xLink('xrow'), btn)
+  return h('div', { class: 'railfoot' }, net, xLink('xrow'), ghLink('xrow ghrow'), btn)
 }
 
 export const X_URL = 'https://x.com/CorePad_hl'
+export const GITHUB_URL = 'https://github.com/CorePad-team'
+function ghLink(cls: string) {
+  return h('a', { class: cls, href: GITHUB_URL, target: '_blank', rel: 'noopener', 'aria-label': 'CorePad on GitHub' }, h('span', null, 'GitHub'), h('b', null, 'CorePad-team ↗'))
+}
 function xLink(cls: string) {
   return h('a', { class: cls, href: X_URL, target: '_blank', rel: 'noopener', 'aria-label': 'CorePad on X' }, h('span', null, 'X'), h('b', null, '@CorePad_hl ↗'))
 }

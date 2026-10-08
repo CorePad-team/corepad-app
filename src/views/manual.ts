@@ -126,7 +126,8 @@ listPrice       = virtualHype_end / 273 M               (HYPE per token)`),
       addrRow('Router', 'HyperEVM 998', BRIDGE_CONTRACTS.hyperEvmRouter),
       addrRow('Outbox', 'HyperEVM 998', BRIDGE_CONTRACTS.hyperEvmOutbox, 'Where withdrawals from Elysium are claimed after the challenge period.'),
     ),
-    p('Each launch deploys its own ', c('CorePadToken'), ' and ', c('LaunchPool'), '; their addresses are in ', c('LaunchCreated'), ' and on each launch page.'))
+    p('Each launch deploys its own ', c('CorePadToken'), ' and ', c('LaunchPool'), '; their addresses are in ', c('LaunchCreated'), ' and on each launch page.'),
+    p('Source code: ', h('a', { href: 'https://github.com/CorePad-team/corepad-contracts', target: '_blank', rel: 'noopener' }, 'corepad-contracts ↗'), ' (contracts, tests, keeper) and ', h('a', { href: 'https://github.com/CorePad-team/corepad-app', target: '_blank', rel: 'noopener' }, 'corepad-app ↗'), ' (this site).'))
 
   const net = h('dl', { class: 'defs' })
   const nrow = (k: string, v: Node | string) => net.append(h('div', null, h('dt', null, k), h('dd', { class: 'val', style: 'grid-column: span 2' }, v)))
