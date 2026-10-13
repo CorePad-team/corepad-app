@@ -3,6 +3,7 @@ import { h, tokens, hype, pct, price, toast, errMsg, short, txLink } from '../ui
 import { abis, pub, send, mined, argsFor, firstFn, wallet } from '../chain'
 import { DEPLOYED, addresses, SUPPLY, NET, ENVIRONMENT } from '../config'
 import { notDeployed, footer } from './common'
+import { normalizeLinks, uploadFile, uploadMeta, setMetadata } from '../meta'
 
 const V_TOKEN0 = 1_073_000_000n * 10n ** 18n
 const CREATOR_CAP = SUPPLY / 50n // 2 %
@@ -42,6 +43,51 @@ export function renderIssue(root: HTMLElement) {
   const buy = h('input', { inputmode: 'decimal', autocomplete: 'off', placeholder: '0.0', 'aria-label': 'Creator buy in HYPE' }) as HTMLInputElement
   const buyHint = h('span', { class: 'hint' }, 'Optional. Leave empty for no creator buy.')
   const err = h('div', { class: 'err' })
+
+  /* ---- identity: logo, banner, other info (stored off-chain, pointed to by CorePadMetadata) ---- */
+  const imgField = (key: 'logo' | 'banner', label: string, help: string) => {
+    const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml', 'aria-label': label, class: 'fhide' }) as HTMLInputElement
+    const prev = h('span', { class: 'imgprev ' + key, 'aria-hidden': 'true' }, '?')
+    const pick = h('button', { type: 'button', class: 'pickbtn' }, 'Choose an image')
+    const clear = h('button', { type: 'button', class: 'linkbtn', hidden: true }, 'remove')
+    let file: File | null = null, url = ''
+    const set = (f: File | null) => {
+      if (url) URL.revokeObjectURL(url)
+      file = f; url = f ? URL.createObjectURL(f) : ''
+      prev.replaceChildren(f ? Object.assign(document.createElement('img'), { src: url, alt: '' }) : '?')
+      pick.textContent = f ? f.name.slice(0, 28) : 'Choose an image'
+      clear.hidden = !f
+      paintPreviewImgs()
+    }
+    pick.addEventListener('click', () => input.click())
+    clear.addEventListener('click', () => { input.value = ''; set(null) })
+    input.addEventListener('change', () => {
+      const f = input.files?.[0] ?? null
+      if (f && f.size > 5 * 1024 * 1024) { toast(`${label}: ${(f.size / 1048576).toFixed(1)} MB, the limit is 5 MB`, true); input.value = ''; return }
+      if (f && !/^image\/(png|jpeg|gif|webp|svg\+xml)$/.test(f.type)) { toast(`${label}: PNG, JPEG, GIF, WebP or SVG`, true); input.value = ''; return }
+      set(f)
+    })
+    const el = h('div', { class: 'field' }, h('span', { class: 'flabel' }, h('span', null, label), clear), h('div', { class: 'imgpick' }, prev, pick, input), h('span', { class: 'hint' }, help))
+    return { el, get: () => file, url: () => url }
+  }
+  const logoField = imgField('logo', 'Logo', 'Square works best. PNG, JPEG, GIF, WebP or SVG, up to 5 MB.')
+  const bannerField = imgField('banner', 'Banner', 'Shown across the top of the launch page. Wide crop, roughly 3:1.')
+  const desc = h('textarea', { maxlength: '500', rows: '3', placeholder: 'What is this token about?', 'aria-label': 'Description' }) as HTMLTextAreaElement
+  const site = h('input', { autocomplete: 'off', placeholder: 'example.com', 'aria-label': 'Website' }) as HTMLInputElement
+  const xh = h('input', { autocomplete: 'off', placeholder: '@handle', 'aria-label': 'X' }) as HTMLInputElement
+  const tg = h('input', { autocomplete: 'off', placeholder: '@group or t.me link', 'aria-label': 'Telegram' }) as HTMLInputElement
+  const descCount = h('span', null, '0 / 500')
+  desc.addEventListener('input', () => { descCount.textContent = `${desc.value.length} / 500` })
+  const other = h('details', { class: 'other' },
+    h('summary', null, h('span', { class: 'label' }, h('b', null, 'Other info')), h('span', { class: 'hint' }, 'Description, website, X, Telegram · optional')),
+    h('div', { class: 'otherbody' },
+      h('div', { class: 'field' }, h('span', { class: 'flabel' }, h('span', null, 'Description'), descCount), h('div', { class: 'input ta' }, desc)),
+      h('div', { class: 'field' }, h('span', { class: 'flabel' }, h('span', null, 'Website')), h('div', { class: 'input' }, site)),
+      h('div', { class: 'field2' },
+        h('div', { class: 'field' }, h('span', { class: 'flabel' }, h('span', null, 'X')), h('div', { class: 'input' }, xh)),
+        h('div', { class: 'field' }, h('span', { class: 'flabel' }, h('span', null, 'Telegram')), h('div', { class: 'input' }, tg)))))
+  const hasMeta = () => Boolean(logoField.get() || bannerField.get() || desc.value.trim() || site.value.trim() || xh.value.trim() || tg.value.trim())
+  let paintPreviewImgs = () => {}
   const submit = h('button', { class: 'btn solid wide', type: 'submit', form: 'issue-form' }, DEPLOYED ? `Issue ${NET.action}` : 'Unavailable · no testnet deployment')
   submit.setAttribute('disabled', '')
   const simNote = h('p', { class: 'hint', style: 'margin:0' }, DEPLOYED ? 'Fill in name and symbol; the transaction is simulated before you can sign.' : '')
@@ -49,15 +95,26 @@ export function renderIssue(root: HTMLElement) {
   const form = h('form', { novalidate: true, id: 'issue-form', class: 'fields' },
     h('div', { class: 'field' }, h('label', { class: 'flabel', for: 'f-name' }, h('span', null, 'Name'), nameCount), h('div', { class: 'input' }, Object.assign(name, { id: 'f-name' }))),
     h('div', { class: 'field' }, h('label', { class: 'flabel', for: 'f-sym' }, h('span', null, 'Symbol'), h('span', null, 'A–Z 0–9 · 1–6')), h('div', { class: 'input' }, Object.assign(sym, { id: 'f-sym' }))),
+    h('div', { class: 'field2' }, logoField.el, bannerField.el),
+    other,
     h('div', { class: 'field' }, h('label', { class: 'flabel', for: 'f-buy' }, h('span', null, 'Creator buy · optional'), h('span', null, 'cap 2 %')), h('div', { class: 'input' }, Object.assign(buy, { id: 'f-buy' }), h('span', { class: 'unit' }, 'HYPE')), buyHint),
     h('p', { class: 'note', style: 'margin:0' }, 'Two separate limits. Creator-buy cap: 2 % of supply (LaunchPool.CREATOR_MAX), any excess HYPE refunded. Launch guard: the creator buy is then counted in your cumulative guard allowance (1 % per address for 60 s), so any further buy from this address in that window reverts (GuardExceeded); it is not clipped. The estimate below is checked by simulating launch() against the connected contracts.'),
   )
   // preview ticket
   const pSym = h('b', { class: 'empty-id' }, 'Enter token metadata'), pName = h('span', { class: 'sec2' }, '')
+  const pLogo = h('span', { class: 'tile big', 'aria-hidden': 'true' }, '?')
+  const pBanner = h('div', { class: 'pbanner', hidden: true })
+  paintPreviewImgs = () => {
+    const l = logoField.url(), b = bannerField.url()
+    pLogo.replaceChildren(l ? Object.assign(document.createElement('img'), { src: l, alt: '' }) : (sym.value.slice(0, 2) || '?'))
+    pBanner.hidden = !b
+    pBanner.style.backgroundImage = b ? `url("${b}")` : ''
+  }
   const pBuy = h('dd', { class: 'num' }, '—'), pOpen = h('dd', { class: 'num' }, '—'), pTarget = h('dd', { class: 'num' }, '—')
   const preview = h('div', { class: 'ticketcard' },
     h('div', { class: 'top' }, h('span', { class: 'label' }, 'Transaction preview'), h('span', { class: 'mono sec2', style: 'font-size:11px' }, 'launch() · ' + NET.where)),
-    h('div', { class: 'big' }, pSym, pName),
+    pBanner,
+    h('div', { class: 'big withlogo' }, pLogo, h('div', null, pSym, pName)),
     h('dl', { class: 'kv' },
       h('div', null, h('dt', null, 'Supply'), h('dd', { class: 'num' }, '1,000,000,000')),
       h('div', null, h('dt', null, 'Curve'), h('dd', { class: 'num' }, '800 M for sale · 200 M book')),
@@ -152,6 +209,7 @@ export function renderIssue(root: HTMLElement) {
     } catch (e) { if (seq === simSeq) simNote.textContent = 'Simulation rejected: ' + errMsg(e) }
   }
   ;[name, sym, buy].forEach((i) => i.addEventListener('input', paint))
+  sym.addEventListener('input', () => paintPreviewImgs())
   paint()
 
   form.addEventListener('submit', async (e) => {
@@ -174,8 +232,24 @@ export function renderIssue(root: HTMLElement) {
       minOut = capped !== null ? (capped * 99n) / 100n : 0n // 1 % slippage on a fresh curve: only the creator trades in this tx
     }
     if (!addresses.factory) return
-    submit.setAttribute('disabled', ''); submit.textContent = 'Confirm in wallet…'
+    const links = normalizeLinks({ website: site.value, twitter: xh.value, telegram: tg.value })
+    if (links.problem) { err.textContent = links.problem; (other as HTMLDetailsElement).open = true; return }
+    submit.setAttribute('disabled', '')
     try {
+      // 1. metadata first: if an upload fails, nothing has been signed yet
+      let uri: string | null = null
+      if (hasMeta()) {
+        submit.textContent = 'Uploading images…'
+        const safe = s.toLowerCase()
+        const lf = logoField.get(), bf = bannerField.get()
+        const [image, banner] = await Promise.all([
+          lf ? uploadFile('logo', lf, `${safe}.${(lf.name.split('.').pop() || 'img').toLowerCase()}`) : Promise.resolve(undefined),
+          bf ? uploadFile('banner', bf, `${safe}.${(bf.name.split('.').pop() || 'img').toLowerCase()}`) : Promise.resolve(undefined),
+        ])
+        uri = await uploadMeta({ name: n, symbol: s, description: desc.value, image, banner, website: links.website, twitter: links.twitter, telegram: links.telegram })
+      }
+      // 2. the launch itself
+      submit.textContent = 'Confirm the launch in your wallet…'
       // +30 % over the estimate: launch deploys two contracts and forwards a fixed gas stipend to the bridge factory
       const tx = await send({ address: addresses.factory, abi: abis.factory, functionName: 'launch', value, gasBufferPct: 30,
         args: argsFor(abis.factory, 'launch', { name: n, symbol: s, minTokensOut: minOut, minOut }) })
@@ -189,6 +263,12 @@ export function renderIssue(root: HTMLElement) {
         } catch { /* other contract's log */ }
       }
       toast(`Issued ${s}. tx ${short(tx)}`)
+      // 3. attach the metadata (second signature). A refusal leaves a valid launch; the creator can attach it later from the launch page.
+      if (id !== null && uri && addresses.metadata) {
+        submit.textContent = 'Confirm the metadata in your wallet…'
+        try { await mined(await setMetadata(id, uri)); toast('Metadata attached') }
+        catch (e3) { toast('Launch is live; metadata not attached: ' + errMsg(e3) + '. Attach it from the launch page.', true, 12000) }
+      }
       if (id !== null) location.hash = `#/launch/${id}`
       else err.replaceChildren(h('a', { href: txLink(tx), target: '_blank', rel: 'noopener' }, 'Issued, view tx ↗'))
     } catch (e2) { err.textContent = errMsg(e2) }

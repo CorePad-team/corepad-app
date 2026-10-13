@@ -59,6 +59,7 @@ export const addresses = {
   adapter: addr('ElysiumBridgeAdapter', 'adapter', 'bridgeAdapter'),
   keeper: addr('keeper', 'Keeper'),
   coreSettler: addr('coreSettler', 'CoreSettler'),
+  metadata: addr('CorePadMetadata', 'metadata'),
 }
 const sb = pick('startBlock', 'deployedAtBlock', 'deployBlock', 'fromBlock', 'blockNumber')
 export const START_BLOCK: bigint = typeof sb === 'number' || (typeof sb === 'string' && /^\d+$/.test(sb)) ? BigInt(sb) : 0n

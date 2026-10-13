@@ -5,6 +5,7 @@ import { subscribe, leftBps, stageOf, type Market, type Row } from '../market'
 import { tableSection } from './ladder'
 import { notDeployed, footer } from './common'
 import { mountTradeChart } from '../chart'
+import { paintTile, onMeta, metaOf } from '../meta'
 
 const TAGLINE = 'CorePad leverages Elysium to execute high-density launches, settling seamlessly into Hyperliquid Core.'
 const code = (s: string) => h('code', null, s)
@@ -26,12 +27,13 @@ export function renderHome(root: HTMLElement) {
 
   const slots = Array.from({ length: 5 }, (_, i) => {
     const sym = h('b', null, '—'), nm = h('span', null, ''), pc = h('b', { class: 'n' }, ''), rs = h('span', { class: 'n' }, ''), bar = h('i', { style: 'width:0%' })
+    const tile = h('span', { class: 'tile sm', 'aria-hidden': 'true' }, '')
     const el = h('a', { class: 'crow', href: '#/ladder', hidden: '' },
       h('span', { class: 'rk n' }, String(i + 1)),
-      h('span', { class: 'tk' }, sym, nm),
+      h('span', { class: 'tkw' }, tile, h('span', { class: 'tk' }, sym, nm)),
       h('span', { class: 'cr' }, pc, rs),
       h('span', { class: 'cbar2', 'aria-hidden': 'true' }, bar))
-    return { el, sym, nm, pc, rs, bar }
+    return { el, tile, sym, nm, pc, rs, bar }
   })
   const contEmpty = h('p', { class: 'hint pempty' }, DEPLOYED ? 'Reading launches…' : 'No deployment to read.')
   const contenders = h('aside', { class: 'panel' },
@@ -40,8 +42,9 @@ export function renderHome(root: HTMLElement) {
 
   const closedSlots = Array.from({ length: 3 }, () => {
     const sym = h('b', null, ''), nm = h('span', null, ''), st = h('span', { class: 'state done' }, ''), raised = h('span', { class: 'n' }, '')
-    const el = h('a', { class: 'gcard', href: '#/ladder', hidden: '' }, h('span', { class: 'tk' }, sym, nm), h('span', { class: 'gr' }, raised, st))
-    return { el, sym, nm, st, raised }
+    const tile = h('span', { class: 'tile sm', 'aria-hidden': 'true' }, '')
+    const el = h('a', { class: 'gcard', href: '#/ladder', hidden: '' }, h('span', { class: 'tkw' }, tile, h('span', { class: 'tk' }, sym, nm)), h('span', { class: 'gr' }, raised, st))
+    return { el, tile, sym, nm, st, raised }
   })
   const closedEmpty = h('p', { class: 'hint pempty' }, 'No curve has closed yet.')
   const closed = h('div', { class: 'panel' },
@@ -65,10 +68,13 @@ export function renderHome(root: HTMLElement) {
   const tv = mountTradeChart(chartHost, { height: 190, compact: true })
   let featKey = ''
   const featLabel = h('b', null, 'Next to graduate')
+  const featTile = h('span', { class: 'tile big', 'aria-hidden': 'true' }, '')
+  const featBanner = h('div', { class: 'fbanner', hidden: true })
   const featLink = h('a', { class: 'btn solid', href: '#/ladder' }, 'Trade →')
   const featured = h('article', { class: 'feat' },
+    featBanner,
     h('div', { class: 'fhead' },
-      h('div', null, h('span', { class: 'label' }, featLabel), h('div', { class: 'ftk' }, f.sym, f.nm)),
+      h('div', { class: 'fid' }, featTile, h('div', null, h('span', { class: 'label' }, featLabel), h('div', { class: 'ftk' }, f.sym, f.nm))),
       h('div', { class: 'fbig' }, f.pc, h('span', { class: 'hint' }, 'of the curve sold'), f.raised)),
     h('div', { class: 'fbar', 'aria-hidden': 'true' }, f.bar),
     chartHost,
@@ -130,6 +136,7 @@ export function renderHome(root: HTMLElement) {
       if (!r) { s.el.hidden = true; return }
       s.el.hidden = false
       s.el.setAttribute('href', `#/launch/${r.launch.id}`)
+      paintTile(s.tile, r.launch.id, r.launch.symbol)
       s.sym.textContent = r.launch.symbol
       s.nm.textContent = `${r.launch.name} · ${r.createdAt ? ago(m.now - r.createdAt) + ' ago' : '#' + r.launch.id}`
       s.pc.textContent = (r.state!.progress * 100).toFixed(1) + '%'
@@ -147,6 +154,10 @@ export function renderHome(root: HTMLElement) {
     if (pick) {
       featLabel.textContent = pick.state?.frozen ? (pick.state.graduated ? 'Latest graduated' : 'Latest curve closed') : 'Next to graduate'
       const s = pick.state, sold = s ? (s.frozen ? 1 : s.progress) : 0
+      paintTile(featTile, pick.launch.id, pick.launch.symbol)
+      const fm = metaOf(pick.launch.id)
+      featBanner.hidden = !fm?.banner
+      featBanner.style.backgroundImage = fm?.banner ? `url("${fm.banner}")` : ''
       f.sym.textContent = pick.launch.symbol
       f.nm.textContent = pick.launch.name
       f.pc.textContent = s ? (sold * 100).toFixed(1) + '%' : '—'
@@ -169,6 +180,7 @@ export function renderHome(root: HTMLElement) {
       if (!r) { s.el.hidden = true; return }
       s.el.hidden = false
       s.el.setAttribute('href', `#/launch/${r.launch.id}`)
+      paintTile(s.tile, r.launch.id, r.launch.symbol)
       s.sym.textContent = r.launch.symbol
       s.nm.textContent = r.launch.name
       s.raised.textContent = `${hype(r.state!.graduated ? r.state!.target : r.state!.raised, 2)} HYPE`
@@ -190,11 +202,13 @@ export function renderHome(root: HTMLElement) {
     fillsEmpty.hidden = m.recent.length > 0
   }
   let unsub: (() => void) | null = null
+  let lastM: Market | null = null
+  const offMeta = onMeta(() => { if (lastM) paint(lastM) })
   if (DEPLOYED) unsub = subscribe((m, err) => {
-    if (m) paint(m)
+    if (m) { lastM = m; paint(m) }
     if (err && !m) contEmpty.textContent = 'Reconnecting to Elysium · ' + errMsg(err)
   })
   else featRow.hidden = true
 
-  return () => { stopField(); ro.disconnect(); stopTable?.(); unsub?.(); tv.destroy() }
+  return () => { stopField(); ro.disconnect(); stopTable?.(); unsub?.(); offMeta(); tv.destroy() }
 }

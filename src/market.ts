@@ -2,6 +2,7 @@ import type { Address, Log } from 'viem'
 import { formatEther } from 'viem'
 import { pub, abis, eventItem, logsWindowed, fetchLaunches, poolStates, type Launch, type PoolState } from './chain'
 import { DEPLOYED } from './config'
+import { refreshMeta } from './meta'
 
 /** Per-launch activity, rebuilt from the pool's own Trade events. */
 export type Activity = {
@@ -141,7 +142,7 @@ let fails = 0
 async function tick() {
   if (busy) return
   busy = true
-  try { last = await readMarket(); fails = 0; subs.forEach((f) => f(last)) }
+  try { last = await readMarket(); fails = 0; subs.forEach((f) => f(last)); void refreshMeta(last.rows.map((r) => r.launch.id)) }
   catch (e) {
     // a single throttled read is routine on a public node: only report a failure that persists
     fails++
@@ -179,7 +180,7 @@ export function subscribe(f: (m: Market | null, err?: unknown) => void): () => v
   if (last) f(last)
   if (!timer) {
     // first paint from the edge snapshot, unless the live read is already there
-    if (!last) snapshot().then((m) => { if (m && !last) { last = m; subs.forEach((g) => g(m)) } })
+    if (!last) snapshot().then((m) => { if (m && !last) { last = m; subs.forEach((g) => g(m)); void refreshMeta(m.rows.map((r) => r.launch.id), true) } })
     tick(); timer = window.setInterval(tick, 8000)
   }
   return () => { subs.delete(f); if (!subs.size) { clearInterval(timer); timer = 0 } }

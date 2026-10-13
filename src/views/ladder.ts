@@ -2,12 +2,13 @@ import type { Address } from 'viem'
 import { h, price, hype, errMsg, ago } from '../ui'
 import { subscribe, leftBps, stageOf, type Market, type Row } from '../market'
 import { isRateLimit } from '../chain'
+import { paintTile, onMeta } from '../meta'
 import { DEPLOYED } from '../config'
 import { notDeployed, footer } from './common'
 
 export type Filter = 'all' | 'absorbing' | 'closed'
 export type Sort = 'progress' | 'new' | 'volume' | 'raised'
-type RowRefs = { el: HTMLElement; age: HTMLElement; px: HTMLElement; bar: HTMLElement; pc: HTMLElement; rs: HTMLElement; vol: HTMLElement; tr: HTMLElement; st: HTMLElement; act: HTMLElement }
+type RowRefs = { el: HTMLElement; tile: HTMLElement; age: HTMLElement; px: HTMLElement; bar: HTMLElement; pc: HTMLElement; rs: HTMLElement; vol: HTMLElement; tr: HTMLElement; st: HTMLElement; act: HTMLElement }
 
 const FILTERS: [Filter, string][] = [['all', 'All'], ['absorbing', 'Absorbing'], ['closed', 'Curve closed']]
 const SORTS: [Sort, string][] = [['progress', 'Closest'], ['new', 'New'], ['volume', 'Volume'], ['raised', 'Raised']]
@@ -64,10 +65,11 @@ export function mountTable(host: HTMLElement, opts: { limit?: number; filter: ()
     const bar = h('i', { style: 'width:0%' })
     const st = h('span', { class: 'state' }, '…')
     const act = h('span', { class: 'go' }, 'Trade')
+    const tile = h('span', { class: 'tile', 'aria-hidden': 'true' }, l.symbol.slice(0, 2))
     const el = h('a', { class: 'trow', href: `#/launch/${l.id}`, role: 'listitem', 'aria-label': `${l.symbol}, ${l.name}, launch ${l.id}` },
       h('span', { class: 'c-id' }, String(l.id).padStart(3, '0')),
       h('span', { class: 'c-tok' },
-        h('span', { class: 'tile', 'aria-hidden': 'true' }, l.symbol.slice(0, 2)),
+        tile,
         h('span', { class: 'tk' }, h('b', null, l.symbol), h('span', null, l.name, h('span', { class: 'sep' }, ' · '), age))),
       h('span', { class: 'c-px n r' }, px),
       h('span', { class: 'c-pg' }, h('span', { class: 'pbar' }, bar), h('span', { class: 'n' }, pc)),
@@ -76,7 +78,7 @@ export function mountTable(host: HTMLElement, opts: { limit?: number; filter: ()
       h('span', { class: 'c-tr n r' }, tr),
       h('span', { class: 'c-st r' }, st),
       h('span', { class: 'c-go' }, act))
-    return { el, age, px, bar, pc, rs, vol, tr, st, act }
+    return { el, tile, age, px, bar, pc, rs, vol, tr, st, act }
   }
 
   function layout() {
@@ -92,6 +94,7 @@ export function mountTable(host: HTMLElement, opts: { limit?: number; filter: ()
     }
     for (const r of shown) {
       const x = refs.get(r.launch.pool)!, s = r.state
+      paintTile(x.tile, r.launch.id, r.launch.symbol)
       x.age.textContent = r.createdAt ? ago(market.now - r.createdAt) + ' ago' : '#' + r.launch.id
       x.vol.textContent = hype(r.act.volume, 2)
       x.tr.textContent = String(r.act.trades)
@@ -124,7 +127,8 @@ export function mountTable(host: HTMLElement, opts: { limit?: number; filter: ()
     if (!m) return
     stale = false; market = m; layout()
   })
-  return { stop: unsub, relayout: layout }
+  const offMeta = onMeta(() => layout())
+  return { stop: () => { unsub(); offMeta() }, relayout: layout }
 }
 
 /** Tabs + sort pills over a table, shared by the home page and the Launches page. */

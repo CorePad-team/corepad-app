@@ -7,6 +7,8 @@ import {
 import { DEPLOYED, SUPPLY, FOR_SALE, addresses } from '../config'
 import { notDeployed, footer } from './common'
 import { mountTradeChart } from '../chart'
+import { refreshMeta, metaOf, onMeta, paintTile } from '../meta'
+import { metaEditor } from './metaedit'
 
 const SLIPS = [0.5, 1, 2, 5]
 const DEADLINES = [2, 5, 20]
@@ -47,14 +49,37 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
 
   /* ---- identity ---- */
   const staleTag = h('span', { class: 'stale' })
-  root.append(h('header', { class: 'lhead' },
+  const banner = h('div', { class: 'lbanner', hidden: true })
+  const ltile = h('span', { class: 'tile big', 'aria-hidden': 'true' }, L.symbol.slice(0, 2))
+  const ldesc = h('p', { class: 'ldesc', hidden: true })
+  const llinks = h('div', { class: 'llinks', hidden: true })
+  const editHost = h('div')
+  const paintMeta = () => {
+    const m = metaOf(L.id)
+    paintTile(ltile, L.id, L.symbol)
+    banner.hidden = !m?.banner
+    banner.style.backgroundImage = m?.banner ? `url("${m.banner}")` : ''
+    ldesc.hidden = !m?.description; ldesc.textContent = m?.description ?? ''
+    const links: [string, string | undefined][] = [['Website', m?.website], ['X', m?.twitter], ['Telegram', m?.telegram]]
+    llinks.replaceChildren(...links.filter(([, u]) => u).map(([t, u]) => h('a', { href: u!, target: '_blank', rel: 'noopener nofollow ugc' }, t + ' ↗')))
+    llinks.hidden = !llinks.childElementCount
+    const isCreator = wallet.account?.toLowerCase() === L.creator.toLowerCase()
+    if (isCreator && !editHost.childElementCount) editHost.append(metaEditor(L, () => metaOf(L.id), paintMeta))
+    if (!isCreator) editHost.replaceChildren()
+  }
+  cleanups.push(onMeta(paintMeta) as unknown as () => void)
+  const onW = () => paintMeta(); wallet.listeners.add(onW); cleanups.push(() => wallet.listeners.delete(onW))
+  void refreshMeta([L.id], true)
+  root.append(banner, h('header', { class: 'lhead' },
     h('span', { class: 'label' }, h('a', { href: '#/ladder', style: 'color:inherit;text-decoration:none' }, '← Launches'), ` · #${String(L.id).padStart(3, '0')} `, staleTag),
-    h('h1', null, L.symbol, h('span', null, L.name)),
+    h('div', { class: 'lid' }, ltile, h('h1', null, L.symbol, h('span', null, L.name))),
+    ldesc, llinks, editHost,
     h('div', { class: 'addrs' },
       h('span', null, 'token ', ext(addrLink(L.token), short(L.token), { title: L.token })),
       h('span', null, 'pool ', ext(addrLink(L.pool), short(L.pool), { title: L.pool })),
-      h('span', null, 'creator ', ext(addrLink(L.creator), short(L.creator), { title: L.creator })),
+      h('span', null, 'creator ', h('a', { href: '#/profile/' + L.creator, title: L.creator }, short(L.creator))),
     )))
+  paintMeta()
 
   /* ---- summary: curve sold ---- */
   const fill = h('i', { style: 'width:0%' })

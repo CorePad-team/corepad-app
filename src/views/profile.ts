@@ -4,6 +4,7 @@ import { abis, pub, wallet, eventItem, logsWindowed, fetchLaunches, poolStates, 
 import { DEPLOYED, ELYSIUM } from '../config'
 import { notDeployed, footer } from './common'
 import { stageOf } from '../market'
+import { paintTile, refreshMeta, onMeta } from '../meta'
 
 type Position = {
   l: Launch; st: PoolState | null; bal: bigint
@@ -130,7 +131,7 @@ export function renderProfile(root: HTMLElement, arg: string) {
           const c: Record<string, HTMLElement> = {}
           for (const key of ['bal', 'entry', 'px', 'val', 'exit', 'pnl', 'pct', 'st', 'go']) c[key] = h('span', null, '—')
           const el = h('a', { class: 'trow' + (p.bal > 0n ? '' : ' closedpos'), href: `#/launch/${p.l.id}`, role: 'listitem', 'data-pool': p.l.pool },
-            h('span', { class: 'c-tok' }, h('span', { class: 'tile', 'aria-hidden': 'true' }, p.l.symbol.slice(0, 2)), h('span', { class: 'tk' }, h('b', null, p.l.symbol), h('span', null, p.l.name + ' · #' + p.l.id))),
+            h('span', { class: 'c-tok' }, h('span', { class: 'tile', 'aria-hidden': 'true', 'data-id': String(p.l.id), 'data-sym': p.l.symbol }, p.l.symbol.slice(0, 2)), h('span', { class: 'tk' }, h('b', null, p.l.symbol), h('span', null, p.l.name + ' · #' + p.l.id))),
             h('span', { class: 'c-bal n r' }, c.bal), h('span', { class: 'c-en n r' }, c.entry), h('span', { class: 'c-px n r' }, c.px),
             h('span', { class: 'c-val n r' }, c.val), h('span', { class: 'c-ex n r' }, c.exit),
             h('span', { class: 'c-pnl n r' }, c.pnl, h('span', { class: 'pct' }, c.pct)),
@@ -153,6 +154,8 @@ export function renderProfile(root: HTMLElement, arg: string) {
         c.st.className = 'state' + (p.st?.frozen ? ' done' : ''); c.st.textContent = p.bal > 0n ? stageOf(p.st) : 'Exited'
         c.go.className = 'go' + (p.st && !p.st.frozen ? ' solid' : ''); c.go.textContent = p.st && !p.st.frozen ? 'Trade' : 'View'
       }
+      await refreshMeta(d.positions.map((p) => p.l.id), true)
+      holdBody.querySelectorAll<HTMLElement>('.tile[data-id]').forEach((t) => paintTile(t, BigInt(t.dataset.id!), t.dataset.sym!))
       holdStatus.replaceChildren(d.positions.length ? '' : h('p', { class: 'hint' }, mine ? 'Nothing yet. Buy on an open curve and it shows up here.' : 'This address holds no CorePad token and has no trade.'))
 
       actBody.replaceChildren(...(d.trades.length ? d.trades.slice(0, 25).map((t) => {
@@ -173,8 +176,9 @@ export function renderProfile(root: HTMLElement, arg: string) {
     }
   }
   load()
+  const offMeta = onMeta(() => holdBody.querySelectorAll<HTMLElement>('.tile[data-id]').forEach((t) => paintTile(t, BigInt(t.dataset.id!), t.dataset.sym!)))
   const timer = window.setInterval(load, 12000)
   const onWallet = () => { if (!arg && wallet.account && wallet.account.toLowerCase() !== target.toLowerCase()) location.hash = '#/profile/' + wallet.account }
   wallet.listeners.add(onWallet)
-  return () => { alive = false; clearInterval(timer); wallet.listeners.delete(onWallet) }
+  return () => { alive = false; clearInterval(timer); wallet.listeners.delete(onWallet); offMeta() }
 }
