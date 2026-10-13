@@ -499,5 +499,5 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
   refresh().then(() => { requote(); refreshPipe() })
   pullTape(); refreshBalance(); updateAction()
   amt.addEventListener('input', updateAction)
-  timers.push(window.setInterval(refresh, 3000), window.setInterval(pullTape, 3000), window.setInterval(refreshPipe, 12000))
+  timers.push(window.setInterval(refresh, 5000), window.setInterval(pullTape, 5000), window.setInterval(refreshPipe, 15000))
 }

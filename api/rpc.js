@@ -22,6 +22,8 @@ export default async function handler(req, res) {
         const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
         if (r.status >= 500 || r.status === 429) { last = r.status; continue }
         const text = await r.text()
+        // Conduit throttles with HTTP 200 + -32017: wait and retry once before handing it to the browser
+        if (/-32017|Rate Limit Exceeded/i.test(text) && attempt === 0) { last = 'rate limited'; await new Promise((ok) => setTimeout(ok, 500)); continue }
         res.setHeader('content-type', 'application/json')
         res.setHeader('cache-control', 'no-store')
         res.status(200).send(text)

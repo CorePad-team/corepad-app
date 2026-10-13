@@ -1,6 +1,6 @@
 import type { Address, Log } from 'viem'
 import { formatEther } from 'viem'
-import { pub, abis, eventItem, logsChunked, fetchLaunches, poolStates, type Launch, type PoolState } from './chain'
+import { pub, abis, eventItem, logsWindowed, fetchLaunches, poolStates, type Launch, type PoolState } from './chain'
 import { DEPLOYED } from './config'
 
 /** Per-launch activity, rebuilt from the pool's own Trade events. */
@@ -22,35 +22,62 @@ export type Market = {
 const acts = new Map<Address, Activity>()
 /** last good pool state: a failed read keeps it instead of turning into zeros */
 const lastState = new Map<Address, PoolState>()
+let ticks = 0
 const created = new Map<bigint, number>()
 const tradeEv = eventItem(abis.pool, 'Trade')
 
 function argsOf(l: Log): Record<string, unknown> { return ((l as unknown as { args?: Record<string, unknown> }).args ?? {}) }
 
-async function refreshActivity(l: Launch, head: bigint): Promise<Activity> {
-  let a = acts.get(l.pool)
-  if (!a) { a = { trades: 0, buys: 0, volume: 0n, traders: new Set(), series: [], lastBlock: l.block - 1n, recent: [] }; acts.set(l.pool, a) }
-  if (!tradeEv || a.lastBlock >= head) return a
-  const logs = await logsChunked(l.pool, tradeEv, a.lastBlock + 1n, head)
+const blank = (l: Launch): Activity => ({ trades: 0, buys: 0, volume: 0n, traders: new Set(), series: [], lastBlock: l.block - 1n, recent: [] })
+/** every block up to here has been read for every known pool */
+let tradeCursor: bigint | null = null
+const known = new Set<Address>()
+
+/**
+ * Trades of ALL pools in one getLogs per window (address array), from a single cursor.
+ * A pool that appears later is read from its own launch block once, then joins the cursor.
+ */
+async function refreshActivity(launches: Launch[], head: bigint): Promise<void> {
+  if (!tradeEv || !launches.length) return
+  const fresh = launches.filter((l) => !known.has(l.pool))
+  if (fresh.length) {
+    const from = fresh.reduce((m, l) => (l.block < m ? l.block : m), fresh[0].block)
+    const to = tradeCursor ?? head
+    if (from <= to) apply(await logsWindowed(fresh.map((l) => l.pool), tradeEv, from, to), launches)
+    fresh.forEach((l) => { known.add(l.pool); if (!acts.has(l.pool)) acts.set(l.pool, blank(l)) })
+    if (tradeCursor === null) tradeCursor = to
+  }
+  if (tradeCursor !== null && head > tradeCursor) {
+    apply(await logsWindowed([...known], tradeEv, tradeCursor + 1n, head), launches)
+    tradeCursor = head
+  }
+}
+
+function apply(logs: Log[], launches: Launch[]) {
+  const byPool = new Map(launches.map((l) => [l.pool.toLowerCase(), l]))
   logs.sort((x, y) => Number((x.blockNumber ?? 0n) - (y.blockNumber ?? 0n)) || (x.logIndex ?? 0) - (y.logIndex ?? 0))
   for (const log of logs) {
+    const l = byPool.get(log.address.toLowerCase())
+    if (!l) continue
+    let a = acts.get(l.pool)
+    if (!a) { a = blank(l); acts.set(l.pool, a) }
     const g = argsOf(log)
     a.trades++
     if (g.isBuy) a.buys++
     a.volume += (g.hypeAmount as bigint) ?? 0n
     if (g.trader) a.traders.add(g.trader as Address)
-    const vh = g.virtualHype as bigint | undefined, vt = g.virtualToken as bigint | undefined
     a.recent.push({ pool: l.pool, symbol: l.symbol, id: l.id, isBuy: Boolean(g.isBuy), hype: (g.hypeAmount as bigint) ?? 0n, trader: g.trader as Address, block: log.blockNumber ?? 0n, tx: String(log.transactionHash), logIndex: log.logIndex ?? 0 })
     if (a.recent.length > 20) a.recent.shift()
+    const vh = g.virtualHype as bigint | undefined, vt = g.virtualToken as bigint | undefined
     if (vh !== undefined && vt && vt > 0n) a.series.push({ block: log.blockNumber ?? 0n, price: Number(formatEther(vh)) / Number(formatEther(vt)) })
   }
-  a.lastBlock = head
-  return a
 }
 
+let blockReads = 0
 async function createdAt(l: Launch): Promise<number | null> {
   const c = created.get(l.id)
   if (c !== undefined) return c
+  if (blockReads++ >= 12) return null // the rest are read on the next ticks
   try {
     const b = await pub.getBlock({ blockNumber: l.block })
     created.set(l.id, Number(b.timestamp))
@@ -63,11 +90,16 @@ export async function readMarket(): Promise<Market> {
   if (!DEPLOYED) return { rows: [], head: 0n, now: Date.now() / 1000, recent: [], totals: { launches: 0, graduated: 0, absorbing: 0, volume: 0n, trades: 0, traders: 0, raised: 0n } }
   const launches = await fetchLaunches()
   const head = await pub.getBlockNumber({ cacheTime: 0 })
-  const [states, actList, times] = await Promise.all([
-    poolStates(launches.map((l) => l.pool)),
-    Promise.all(launches.map((l) => refreshActivity(l, head))),
+  blockReads = 0
+  // graduated pools no longer move (an abort reopens them: re-read every 10th tick to catch it)
+  ticks++
+  const toRead = launches.filter((l) => { const s = lastState.get(l.pool); return !s || !s.graduated || ticks % 10 === 0 }).map((l) => l.pool)
+  const [states, , times] = await Promise.all([
+    poolStates(toRead),
+    refreshActivity(launches, head).catch(() => { /* keep the last good trades; the cursor did not move, next tick retries */ }),
     Promise.all(launches.map(createdAt)),
   ])
+  const actList = launches.map((l) => acts.get(l.pool) ?? blank(l))
   states.forEach((v, k) => lastState.set(k, v))
   const missing = launches.filter((l) => !states.has(l.pool) && !lastState.has(l.pool)).length
   const rows: Row[] = launches.map((l, i) => ({ launch: l, state: states.get(l.pool) ?? lastState.get(l.pool) ?? null, act: actList[i], createdAt: times[i] }))
@@ -91,14 +123,23 @@ export async function readMarket(): Promise<Market> {
 const subs = new Set<(m: Market | null, err?: unknown) => void>()
 let last: Market | null = null
 let timer = 0
+let busy = false
+let fails = 0
 async function tick() {
-  try { last = await readMarket(); subs.forEach((f) => f(last)) }
-  catch (e) { subs.forEach((f) => f(last, e)) }
+  if (busy) return
+  busy = true
+  try { last = await readMarket(); fails = 0; subs.forEach((f) => f(last)) }
+  catch (e) {
+    // a single throttled read is routine on a public node: only report a failure that persists
+    fails++
+    subs.forEach((f) => f(last, fails >= 3 || !last ? e : undefined))
+  }
+  finally { busy = false }
 }
 export function subscribe(f: (m: Market | null, err?: unknown) => void): () => void {
   subs.add(f)
   if (last) f(last)
-  if (!timer) { tick(); timer = window.setInterval(tick, 6000) }
+  if (!timer) { tick(); timer = window.setInterval(tick, 8000) }
   return () => { subs.delete(f); if (!subs.size) { clearInterval(timer); timer = 0 } }
 }
 

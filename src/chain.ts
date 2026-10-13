@@ -17,13 +17,22 @@ export const abis = {
   adapter: AdapterAbi as unknown as Abi,
 }
 
-// Same-origin proxy first (retries upstream server-side), public RPC as a direct fallback.
+// Public RPC direct first: each visitor spends their own rate limit. The same-origin proxy (one shared
+// server IP, retries server-side) is the fallback when the public endpoint is down or throttling.
 const proxy = RPC_OVERRIDE ?? (typeof location !== 'undefined' ? new URL('/api/rpc', location.origin).toString() : PUBLIC_RPC)
 export const pub = createPublicClient({
   chain: ELYSIUM,
-  transport: fallback([http(proxy, { batch: { batchSize: 20 } }), http(PUBLIC_RPC)]),
-  batch: { multicall: true },
+  transport: RPC_OVERRIDE ? http(RPC_OVERRIDE) : fallback([http(PUBLIC_RPC, { batch: { batchSize: 20 } }), http(proxy, { batch: { batchSize: 20 } })]),
+  // one aggregate3 call carries hundreds of view reads: keeps a 100-pool table to one or two requests
+  batch: { multicall: { batchSize: 65_536, wait: 16 } },
 })
+
+/** Conduit answers -32017 "Rate Limit Exceeded" with HTTP 200; other nodes use -32005 or 429. */
+export function isRateLimit(e: unknown): boolean {
+  const m = String((e as { details?: string; message?: string })?.details ?? '') + ' ' + String((e as Error)?.message ?? e)
+  return /rate.?limit|-32017|-32005|429|too many requests/i.test(m)
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /* ---------- ABI introspection: the UI adapts to the real ABI instead of assuming it ---------- */
 type AbiItem = { type: string; name?: string; stateMutability?: string; inputs?: { name: string; type: string }[]; outputs?: { name: string; type: string }[] }
@@ -43,15 +52,35 @@ function argsOf(l: Log): Record<string, unknown> {
   return ((l as unknown as { args?: Record<string, unknown> }).args ?? {})
 }
 
-/** getLogs over [from, to], splitting the range when the node refuses (count limit). */
-export async function logsChunked(address: Address, event: AbiEvent, from: bigint, to: bigint, args?: Record<string, unknown>): Promise<Log[]> {
-  try {
-    return await pub.getLogs({ address, event, args, fromBlock: from, toBlock: to } as Parameters<typeof pub.getLogs>[0]) as Log[]
-  } catch (e) {
-    if (to - from < 2000n) throw e
-    const mid = from + (to - from) / 2n
-    return [...await logsChunked(address, event, from, mid, args), ...await logsChunked(address, event, mid + 1n, to, args)]
+/**
+ * getLogs over [from, to]. A range or result-size refusal splits the range in two; a rate limit never
+ * does (splitting multiplies the requests that caused it): it backs off and retries, then throws.
+ */
+export async function logsChunked(address: Address | Address[], event: AbiEvent, from: bigint, to: bigint, args?: Record<string, unknown>): Promise<Log[]> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await pub.getLogs({ address, event, args, fromBlock: from, toBlock: to } as Parameters<typeof pub.getLogs>[0]) as Log[]
+    } catch (e) {
+      if (isRateLimit(e)) {
+        if (attempt >= 3) throw e
+        await sleep(600 * 2 ** attempt)
+        continue
+      }
+      if (to - from < 2000n) throw e
+      const mid = from + (to - from) / 2n
+      return [...await logsChunked(address, event, from, mid, args), ...await logsChunked(address, event, mid + 1n, to, args)]
+    }
   }
+}
+
+/** Fixed windows, oldest first: a full-history scan is a handful of requests, not one per block range split. */
+export async function logsWindowed(address: Address | Address[], event: AbiEvent, from: bigint, to: bigint, window = 2_000_000n): Promise<Log[]> {
+  const out: Log[] = []
+  for (let a = from; a <= to; a += window) {
+    const b = a + window - 1n < to ? a + window - 1n : to
+    out.push(...await logsChunked(address, event, a, b))
+  }
+  return out
 }
 
 let launchCache: { at: bigint; list: Launch[] } | null = null
@@ -61,7 +90,7 @@ export async function fetchLaunches(): Promise<Launch[]> {
   if (!ev) throw new Error('LaunchCreated missing from the factory ABI')
   const head = await pub.getBlockNumber({ cacheTime: 0 })
   const from = launchCache ? launchCache.at + 1n : START_BLOCK
-  const logs = from <= head ? await logsChunked(addresses.factory, ev, from, head) : []
+  const logs = from <= head ? await logsWindowed(addresses.factory, ev, from, head) : []
   const fresh = logs.map((l) => {
     const a = argsOf(l)
     return {
@@ -181,7 +210,7 @@ export function decodeTrade(l: Log): Trade {
 export async function fetchTrades(pool: Address, from: bigint, to: bigint): Promise<Trade[]> {
   const ev = eventItem(abis.pool, 'Trade')
   if (!ev) return []
-  const logs = await logsChunked(pool, ev, from, to)
+  const logs = await logsWindowed(pool, ev, from, to)
   return logs.map(decodeTrade)
 }
 

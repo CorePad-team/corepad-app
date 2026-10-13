@@ -1,6 +1,7 @@
 import type { Address } from 'viem'
 import { h, price, hype, errMsg, ago } from '../ui'
 import { subscribe, leftBps, stageOf, type Market, type Row } from '../market'
+import { isRateLimit } from '../chain'
 import { DEPLOYED } from '../config'
 import { notDeployed, footer } from './common'
 
@@ -114,7 +115,13 @@ export function mountTable(host: HTMLElement, opts: { limit?: number; filter: ()
 
   status.replaceChildren(h('p', { class: 'hint' }, 'Reading launches…'))
   const unsub = subscribe((m, err) => {
-    if (err) { stale = true; status.replaceChildren(h('p', { class: 'stale' }, 'STALE · last read failed: ' + errMsg(err))); return }
+    if (err) {
+      stale = true
+      status.replaceChildren(h('p', { class: 'stale' }, isRateLimit(err) ? 'Elysium RPC is throttling reads · showing the last good data, retrying' : 'Reconnecting · showing the last good data (' + errMsg(err) + ')'))
+      if (m && !market) { market = m; layout() }
+      return
+    }
+    if (!m) return
     stale = false; market = m; layout()
   })
   return { stop: unsub, relayout: layout }

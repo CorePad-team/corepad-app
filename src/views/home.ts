@@ -204,7 +204,7 @@ export function renderHome(root: HTMLElement) {
   let unsub: (() => void) | null = null
   if (DEPLOYED) unsub = subscribe((m, err) => {
     if (m) paint(m)
-    if (err && !m) contEmpty.textContent = 'STALE · ' + errMsg(err)
+    if (err && !m) contEmpty.textContent = 'Reconnecting to Elysium · ' + errMsg(err)
   })
   else featRow.hidden = true
 
