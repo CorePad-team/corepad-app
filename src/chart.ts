@@ -63,7 +63,7 @@ export function mountTradeChart(host: HTMLElement, opts: { height?: number; comp
   let gen = 0
 
   function render() {
-    if (!chart || !candles || !vol) return
+    if (dead || !chart || !candles || !vol) return
     const pts = ticks.filter((t) => t.price > 0 && times.has(t.block)).sort((a, b) => Number(a.block - b.block) || a.logIndex - b.logIndex)
     if (!pts.length) { candles.setData([]); vol.setData([]); note.textContent = ticks.length ? 'Reading block times…' : 'No trade yet.'; return }
     const t0 = times.get(pts[0].block)!, t1 = times.get(pts[pts.length - 1].block)!
@@ -94,10 +94,10 @@ export function mountTradeChart(host: HTMLElement, opts: { height?: number; comp
       const missing = next.filter((t) => !times.has(t.block)).map((t) => t.block)
       if (missing.length) {
         try { times = await blockTimes(missing) } catch { /* keep what we have */ }
-        if (g === gen) render()
+        if (g === gen && !dead) render()
       }
     },
-    destroy() { dead = true; chart?.remove() },
+    destroy() { if (dead) return; dead = true; const c = chart; chart = candles = vol = null; c?.remove() },
     ready,
   }
 }
