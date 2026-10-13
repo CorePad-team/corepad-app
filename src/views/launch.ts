@@ -6,6 +6,7 @@ import {
 } from '../chain'
 import { DEPLOYED, SUPPLY, FOR_SALE, addresses } from '../config'
 import { notDeployed, footer } from './common'
+import { mountTradeChart } from '../chart'
 
 const SLIPS = [0.5, 1, 2, 5]
 const DEADLINES = [2, 5, 20]
@@ -132,7 +133,11 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
     h('div', { class: 'th', 'aria-hidden': 'true' }, h('span', { class: 'label' }, 'Block'), h('span', { class: 'label' }, 'Side'), h('span', { class: 'label r' }, 'HYPE'),
       h('span', { class: 'label r' }, L.symbol), h('span', { class: 'label r' }, 'Trader'), h('span', { class: 'label r c-tx' }, 'Tx')),
     tapeBody)
-  const layout = h('div', { class: 'layout' }, summary, ticket, stats, track, tape)
+  const chartHost = h('section', { class: 'chartsec a-chart', 'aria-label': 'Price chart' },
+    h('div', { class: 'top' }, h('span', { class: 'label' }, `${L.symbol} · HYPE`), h('span', { class: 'hint' }, 'from Trade events')))
+  const tv = mountTradeChart(chartHost, { height: 340 })
+  cleanups.push(() => tv.destroy())
+  const layout = h('div', { class: 'layout' }, chartHost, summary, ticket, stats, track, tape)
   root.append(layout, footer())
 
   /* ---- ticket behaviour ---- */
@@ -482,6 +487,7 @@ function build(root: HTMLElement, L: Launch, timers: number[], cleanups: (() => 
       for (const t of fresh) { const k = t.tx + ':' + t.logIndex; if (!seen.has(k)) { seen.add(k); trades.push(t); added = true } }
       if (!added && tapeBody.childElementCount) return
       trades.sort((a, b) => Number(b.block - a.block) || b.logIndex - a.logIndex)
+      tv.set(trades.map((t) => ({ block: t.block, logIndex: t.logIndex, price: t.price, hype: t.hype, isBuy: t.isBuy })))
       const top = trades.slice(0, 40)
       if (!top.length) { tapeBody.replaceChildren(h('div', { class: 'none hint' }, 'No Trade events in this data source.')); return }
       tapeBody.replaceChildren(...top.map((t) => h('div', { class: 'tr' },

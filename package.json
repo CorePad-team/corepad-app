@@ -13,6 +13,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "lightweight-charts": "^5.2.1",
     "viem": "^2.56.9"
   },
   "devDependencies": {

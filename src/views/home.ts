@@ -4,11 +4,10 @@ import { DEPLOYED } from '../config'
 import { subscribe, leftBps, stageOf, type Market, type Row } from '../market'
 import { tableSection } from './ladder'
 import { notDeployed, footer } from './common'
+import { mountTradeChart } from '../chart'
 
 const TAGLINE = 'CorePad leverages Elysium to execute high-density launches, settling seamlessly into Hyperliquid Core.'
 const code = (s: string) => h('code', null, s)
-const SVGNS = 'http://www.w3.org/2000/svg'
-const svg = (tag: string, attrs: Record<string, string>) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e }
 
 const STEPS: { no: string; t: string; where: string; body: (string | Node)[] }[] = [
   { no: '01', t: 'Absorb', where: 'Elysium', body: ['A constant-product curve takes the opening burst on 100–200 ms blocks. 800 M of the 1 B supply are sold on the curve, with a 60 s launch guard of 1 % per address.'] },
@@ -62,11 +61,9 @@ export function renderHome(root: HTMLElement) {
 
   /* ---------- 2. featured launch + recently closed ---------- */
   const f = { sym: h('b', null, '—'), nm: h('span', null, ''), pc: h('b', { class: 'n' }, '—'), raised: h('span', { class: 'n' }, ''), px: h('b', { class: 'n' }, '—'), trades: h('b', { class: 'n' }, '—'), traders: h('b', { class: 'n' }, '—'), vol: h('b', { class: 'n' }, '—'), bar: h('i', { style: 'width:0%' }) }
-  const chart = svg('svg', { viewBox: '0 0 600 160', preserveAspectRatio: 'none', class: 'chart', 'aria-hidden': 'true' })
-  for (const y of [40, 80, 120]) chart.append(svg('line', { x1: '0', x2: '600', y1: String(y), y2: String(y), class: 'grid' }))
-  const line = svg('polyline', { points: '', class: 'pl' }); chart.append(line)
-  const tip = svg('circle', { r: '4', class: 'tipdot', cx: '-100', cy: '-100' }); chart.append(tip)
-  const chartNote = h('span', { class: 'hint chartnote' }, '')
+  const chartHost = h('div', { class: 'chartbox' })
+  const tv = mountTradeChart(chartHost, { height: 190, compact: true })
+  let featKey = ''
   const featLabel = h('b', null, 'Next to graduate')
   const featLink = h('a', { class: 'btn solid', href: '#/ladder' }, 'Trade →')
   const featured = h('article', { class: 'feat' },
@@ -74,7 +71,7 @@ export function renderHome(root: HTMLElement) {
       h('div', null, h('span', { class: 'label' }, featLabel), h('div', { class: 'ftk' }, f.sym, f.nm)),
       h('div', { class: 'fbig' }, f.pc, h('span', { class: 'hint' }, 'of the curve sold'), f.raised)),
     h('div', { class: 'fbar', 'aria-hidden': 'true' }, f.bar),
-    h('div', { class: 'chartbox' }, chart, chartNote),
+    chartHost,
     h('div', { class: 'fmeta' },
       h('div', null, h('span', { class: 'label' }, 'Price · HYPE'), f.px),
       h('div', null, h('span', { class: 'label' }, 'Volume · HYPE'), f.vol),
@@ -161,18 +158,9 @@ export function renderHome(root: HTMLElement) {
       f.traders.textContent = String(pick.act.traders.size)
       featLink.setAttribute('href', `#/launch/${pick.launch.id}`)
       featLink.textContent = s?.frozen ? 'View →' : 'Trade →'
-      const pts = pick.act.series
-      if (pts.length >= 2) {
-        const ps = pts.map((p) => p.price), lo = Math.min(...ps), hi = Math.max(...ps), span = hi - lo || hi || 1
-        const xy = pts.map((p, i) => [6 + (i / (pts.length - 1)) * 588, 148 - ((p.price - lo) / span) * 136] as const)
-        line.setAttribute('points', xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '))
-        const [lx, ly] = xy[xy.length - 1]
-        tip.setAttribute('cx', lx.toFixed(1)); tip.setAttribute('cy', ly.toFixed(1))
-        chartNote.textContent = `price after each of ${pts.length} trades · ${price(lo)} → ${price(ps[ps.length - 1])} HYPE`
-      } else {
-        line.setAttribute('points', ''); tip.setAttribute('cx', '-100')
-        chartNote.textContent = pts.length ? 'One trade so far: the chart starts at the second.' : 'No trade yet on this curve.'
-      }
+      // re-feed the chart only when the featured launch or its trade count changes
+      const key = pick.launch.pool + ':' + pick.act.series.length
+      if (key !== featKey) { featKey = key; tv.set(pick.act.series) }
     }
 
     const done = m.rows.filter((r) => r.state?.frozen).sort((a, b) => Number(b.launch.id - a.launch.id))
@@ -208,5 +196,5 @@ export function renderHome(root: HTMLElement) {
   })
   else featRow.hidden = true
 
-  return () => { stopField(); ro.disconnect(); stopTable?.(); unsub?.() }
+  return () => { stopField(); ro.disconnect(); stopTable?.(); unsub?.(); tv.destroy() }
 }

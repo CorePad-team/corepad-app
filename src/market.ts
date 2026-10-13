@@ -7,7 +7,7 @@ import { DEPLOYED } from './config'
 export type Activity = {
   trades: number; buys: number; volume: bigint; traders: Set<Address>
   /** price after each trade, oldest first: virtualHype / virtualToken from the event */
-  series: { block: bigint; price: number }[]
+  series: { block: bigint; logIndex: number; price: number; hype: bigint; isBuy: boolean }[]
   lastBlock: bigint
   /** newest last, capped */
   recent: Fill[]
@@ -69,11 +69,23 @@ function apply(logs: Log[], launches: Launch[]) {
     a.recent.push({ pool: l.pool, symbol: l.symbol, id: l.id, isBuy: Boolean(g.isBuy), hype: (g.hypeAmount as bigint) ?? 0n, trader: g.trader as Address, block: log.blockNumber ?? 0n, tx: String(log.transactionHash), logIndex: log.logIndex ?? 0 })
     if (a.recent.length > 20) a.recent.shift()
     const vh = g.virtualHype as bigint | undefined, vt = g.virtualToken as bigint | undefined
-    if (vh !== undefined && vt && vt > 0n) a.series.push({ block: log.blockNumber ?? 0n, price: Number(formatEther(vh)) / Number(formatEther(vt)) })
+    if (vh !== undefined && vt && vt > 0n) a.series.push({ block: log.blockNumber ?? 0n, logIndex: log.logIndex ?? 0, price: Number(formatEther(vh)) / Number(formatEther(vt)), hype: (g.hypeAmount as bigint) ?? 0n, isBuy: Boolean(g.isBuy) })
   }
 }
 
 let blockReads = 0
+/**
+ * Trades are slower than everything else on a first visit (the whole history of every pool):
+ * give them a short window, then let the scan finish in the background and show up on the next tick.
+ */
+let inflight: Promise<void> | null = null
+async function activityWithin(launches: Launch[], head: bigint, ms: number): Promise<void> {
+  if (!inflight) inflight = refreshActivity(launches, head).catch(() => { /* cursor unchanged: next tick retries */ }).finally(() => { inflight = null; kick() })
+  await Promise.race([inflight, new Promise((r) => setTimeout(r, ms))])
+}
+/** a finished background scan refreshes the views at once instead of waiting a full interval */
+let kick = () => {}
+
 async function createdAt(l: Launch): Promise<number | null> {
   const c = created.get(l.id)
   if (c !== undefined) return c
@@ -89,14 +101,15 @@ async function createdAt(l: Launch): Promise<number | null> {
 export async function readMarket(): Promise<Market> {
   if (!DEPLOYED) return { rows: [], head: 0n, now: Date.now() / 1000, recent: [], totals: { launches: 0, graduated: 0, absorbing: 0, volume: 0n, trades: 0, traders: 0, raised: 0n } }
   const launches = await fetchLaunches()
-  const head = await pub.getBlockNumber({ cacheTime: 0 })
+  // fetchLaunches has just read the head: reuse it instead of a second round trip
+  const head = await pub.getBlockNumber({ cacheTime: 4000 })
   blockReads = 0
   // graduated pools no longer move (an abort reopens them: re-read every 10th tick to catch it)
   ticks++
   const toRead = launches.filter((l) => { const s = lastState.get(l.pool); return !s || !s.graduated || ticks % 10 === 0 }).map((l) => l.pool)
   const [states, , times] = await Promise.all([
     poolStates(toRead),
-    refreshActivity(launches, head).catch(() => { /* keep the last good trades; the cursor did not move, next tick retries */ }),
+    activityWithin(launches, head, 2500),
     Promise.all(launches.map(createdAt)),
   ])
   const actList = launches.map((l) => acts.get(l.pool) ?? blank(l))
@@ -136,10 +149,39 @@ async function tick() {
   }
   finally { busy = false }
 }
+kick = () => { if (subs.size) setTimeout(tick, 50) }
+
+/** Edge-cached snapshot (api/snapshot.js) for the first paint; the live read replaces it as soon as it lands. */
+async function snapshot(): Promise<Market | null> {
+  try {
+    const r = await fetch('/api/snapshot', { headers: { accept: 'application/json' } })
+    if (!r.ok) return null
+    const j = await r.json() as { head: string; at: number; traders: number; rows: { launch: Record<string, string>; state: Record<string, unknown> | null; act: { trades: number; volume: string; traders: number } }[]; recent: Record<string, unknown>[] }
+    const B = (v: unknown) => (v === null || v === undefined ? null : BigInt(v as string))
+    const rows: Row[] = j.rows.map((x) => {
+      const l = { ...x.launch, id: BigInt(x.launch.id), block: BigInt(x.launch.block) } as unknown as Launch
+      const st = x.state ? {
+        virtualHype: B(x.state.virtualHype)!, virtualToken: B(x.state.virtualToken)!, sold: B(x.state.sold)!, raised: B(x.state.raised), target: B(x.state.target),
+        graduated: Boolean(x.state.graduated), frozen: Boolean(x.state.frozen), price: Number(x.state.price), progress: Number(x.state.progress),
+        launchedAt: null, guardSeconds: null, guardMax: null, guardActive: null, ticketId: null, hypeToGraduate: null, tickerReserve: null,
+      } as PoolState : null
+      const act: Activity = { trades: x.act.trades, buys: 0, volume: BigInt(x.act.volume), traders: new Set(), series: [], lastBlock: 0n, recent: [] }
+      return { launch: l, state: st, act, createdAt: null }
+    })
+    let volume = 0n, trades = 0, raised = 0n, graduated = 0, absorbing = 0
+    for (const r of rows) { volume += r.act.volume; trades += r.act.trades; if (r.state) { if (r.state.frozen) graduated++; else absorbing++; raised += r.state.graduated ? (r.state.target ?? 0n) : (r.state.raised ?? 0n) } }
+    const recent = j.recent.map((t) => ({ ...t, id: BigInt(t.id as string), hype: BigInt(t.hype as string), block: BigInt(t.block as string) })) as unknown as Fill[]
+    return { rows, head: BigInt(j.head), now: Date.now() / 1000, recent, totals: { launches: rows.length, graduated, absorbing, volume, trades, traders: j.traders, raised } }
+  } catch { return null }
+}
 export function subscribe(f: (m: Market | null, err?: unknown) => void): () => void {
   subs.add(f)
   if (last) f(last)
-  if (!timer) { tick(); timer = window.setInterval(tick, 8000) }
+  if (!timer) {
+    // first paint from the edge snapshot, unless the live read is already there
+    if (!last) snapshot().then((m) => { if (m && !last) { last = m; subs.forEach((g) => g(m)) } })
+    tick(); timer = window.setInterval(tick, 8000)
+  }
   return () => { subs.delete(f); if (!subs.size) { clearInterval(timer); timer = 0 } }
 }
 

@@ -27,6 +27,13 @@ export const pub = createPublicClient({
   batch: { multicall: { batchSize: 65_536, wait: 16 } },
 })
 
+// getLogs travels alone: inside a JSON-RPC batch, one slow log scan would hold back every fast read
+// sharing that HTTP request (pool states waited 2.6 s behind a history scan).
+const logsClient = createPublicClient({
+  chain: ELYSIUM,
+  transport: RPC_OVERRIDE ? http(RPC_OVERRIDE) : fallback([http(PUBLIC_RPC), http(proxy)]),
+})
+
 /** Conduit answers -32017 "Rate Limit Exceeded" with HTTP 200; other nodes use -32005 or 429. */
 export function isRateLimit(e: unknown): boolean {
   const m = String((e as { details?: string; message?: string })?.details ?? '') + ' ' + String((e as Error)?.message ?? e)
@@ -59,7 +66,7 @@ function argsOf(l: Log): Record<string, unknown> {
 export async function logsChunked(address: Address | Address[], event: AbiEvent, from: bigint, to: bigint, args?: Record<string, unknown>): Promise<Log[]> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await pub.getLogs({ address, event, args, fromBlock: from, toBlock: to } as Parameters<typeof pub.getLogs>[0]) as Log[]
+      return await logsClient.getLogs({ address, event, args, fromBlock: from, toBlock: to } as Parameters<typeof logsClient.getLogs>[0]) as Log[]
     } catch (e) {
       if (isRateLimit(e)) {
         if (attempt >= 3) throw e
@@ -73,32 +80,54 @@ export async function logsChunked(address: Address | Address[], event: AbiEvent,
   }
 }
 
-/** Fixed windows, oldest first: a full-history scan is a handful of requests, not one per block range split. */
-export async function logsWindowed(address: Address | Address[], event: AbiEvent, from: bigint, to: bigint, window = 2_000_000n): Promise<Log[]> {
+/** Wide windows, oldest first (Elysium serves its whole history in one getLogs): one request when the node accepts it, a split only when it refuses the size. */
+export async function logsWindowed(address: Address | Address[], event: AbiEvent, from: bigint, to: bigint, window = 50_000_000n, args?: Record<string, unknown>): Promise<Log[]> {
   const out: Log[] = []
   for (let a = from; a <= to; a += window) {
     const b = a + window - 1n < to ? a + window - 1n : to
-    out.push(...await logsChunked(address, event, a, b))
+    out.push(...await logsChunked(address, event, a, b, args))
   }
   return out
 }
 
-let launchCache: { at: bigint; list: Launch[] } | null = null
-export async function fetchLaunches(): Promise<Launch[]> {
+// LaunchCreated is append-only: keep it in the browser so a return visit only reads the new blocks
+const LKEY = 'corepad.launches.' + (addresses.factory ?? '').toLowerCase()
+function loadCache(): { at: bigint; list: Launch[] } | null {
+  try {
+    const j = JSON.parse(localStorage.getItem(LKEY) ?? 'null')
+    if (!j || !Array.isArray(j.list)) return null
+    return { at: BigInt(j.at), list: j.list.map((l: Record<string, string>) => ({ ...l, id: BigInt(l.id), block: BigInt(l.block) })) as Launch[] }
+  } catch { return null }
+}
+function saveCache(c: { at: bigint; list: Launch[] }) {
+  try { localStorage.setItem(LKEY, JSON.stringify({ at: String(c.at), list: c.list.map((l) => ({ ...l, id: String(l.id), block: String(l.block) })) })) } catch { /* private mode: no cache */ }
+}
+let launchCache: { at: bigint; list: Launch[] } | null = typeof localStorage !== 'undefined' ? loadCache() : null
+let launchesInflight: Promise<Launch[]> | null = null
+
+/** Every launch, from LaunchCreated. Concurrent callers share one read; ids are deduplicated. */
+export function fetchLaunches(): Promise<Launch[]> {
+  if (!launchesInflight) launchesInflight = readLaunches().finally(() => { launchesInflight = null })
+  return launchesInflight
+}
+async function readLaunches(): Promise<Launch[]> {
   if (!addresses.factory) return []
   const ev = eventItem(abis.factory, 'LaunchCreated')
   if (!ev) throw new Error('LaunchCreated missing from the factory ABI')
-  const head = await pub.getBlockNumber({ cacheTime: 0 })
+  // shares the block-height read already in flight (viem dedupes within cacheTime)
+  const head = await pub.getBlockNumber({ cacheTime: 2000 })
   const from = launchCache ? launchCache.at + 1n : START_BLOCK
   const logs = from <= head ? await logsWindowed(addresses.factory, ev, from, head) : []
+  const have = new Set((launchCache?.list ?? []).map((l) => String(l.id)))
   const fresh = logs.map((l) => {
     const a = argsOf(l)
     return {
       id: BigInt(a.id as bigint), token: a.token as Address, pool: a.pool as Address, creator: a.creator as Address,
       name: String(a.name ?? ''), symbol: String(a.symbol ?? ''), block: l.blockNumber ?? 0n,
     }
-  })
+  }).filter((l) => !have.has(String(l.id)))
   launchCache = { at: head, list: [...(launchCache?.list ?? []), ...fresh] }
+  if (fresh.length || from <= head) saveCache(launchCache)
   return launchCache.list
 }
 
@@ -149,9 +178,31 @@ export async function poolState(pool: Address): Promise<PoolState> {
   }
 }
 
-export async function poolStates(pools: Address[]): Promise<Map<Address, PoolState>> {
+/** The seven fields a table row shows. The launch page reads the full state with poolState(). */
+export async function poolStateLite(pool: Address): Promise<PoolState> {
+  const a = abis.pool
+  const [vH, vT, sold, raised, target, grad, frozen] = await Promise.all([
+    readOpt<bigint>(pool, a, ['virtualHype', 'vHype', 'virtualHypeReserve']),
+    readOpt<bigint>(pool, a, ['virtualToken', 'vToken', 'virtualTokenReserve']),
+    readOpt<bigint>(pool, a, ['tokensSold', 'sold']),
+    readOpt<bigint>(pool, a, ['realHype', 'hypeRaised']),
+    readOpt<bigint>(pool, a, ['graduationHype', 'target']),
+    readOpt<boolean>(pool, a, ['graduated']),
+    readOpt<boolean>(pool, a, ['frozen', 'isFrozen']),
+  ])
+  const virtualHype = vH ?? 0n, virtualToken = vT ?? 0n, s = sold ?? 0n
+  return {
+    virtualHype, virtualToken, sold: s, raised, target, graduated: Boolean(grad),
+    frozen: Boolean(grad || (frozen ?? s >= FOR_SALE)),
+    price: virtualToken > 0n ? Number(formatEther(virtualHype)) / Number(formatEther(virtualToken)) : 0,
+    progress: Math.min(1, Number((s * 1_000_000n) / FOR_SALE) / 1_000_000),
+    launchedAt: null, guardSeconds: null, guardMax: null, guardActive: null, ticketId: null, hypeToGraduate: null, tickerReserve: null,
+  }
+}
+
+export async function poolStates(pools: Address[], lite = true): Promise<Map<Address, PoolState>> {
   const out = new Map<Address, PoolState>()
-  await Promise.all(pools.map(async (p) => { try { out.set(p, await poolState(p)) } catch { /* row shows as unreadable */ } }))
+  await Promise.all(pools.map(async (p) => { try { out.set(p, await (lite ? poolStateLite(p) : poolState(p))) } catch { /* row shows as unreadable */ } }))
   return out
 }
 
@@ -195,7 +246,7 @@ export async function quoteSell(pool: Address, st: PoolState, tokensIn: bigint):
 }
 
 /* ---------- Trades ---------- */
-export type Trade = { isBuy: boolean; trader: Address; hype: bigint; tokens: bigint; fee: bigint; block: bigint; tx: Hash; logIndex: number }
+export type Trade = { isBuy: boolean; trader: Address; hype: bigint; tokens: bigint; fee: bigint; block: bigint; tx: Hash; logIndex: number; pool: Address; price: number }
 export function decodeTrade(l: Log): Trade {
   const a = argsOf(l)
   const isBuy = Boolean(a.isBuy)
@@ -205,6 +256,10 @@ export function decodeTrade(l: Log): Trade {
     hype: isBuy ? pickN('hypeIn', 'hypeAmount', 'hype') : pickN('hypeOut', 'hypeAmount', 'hype'),
     tokens: isBuy ? pickN('tokensOut', 'tokenAmount', 'tokens') : pickN('tokensIn', 'tokenAmount', 'tokens'),
     fee: pickN('fee'), block: l.blockNumber ?? 0n, tx: l.transactionHash as Hash, logIndex: l.logIndex ?? 0,
+    pool: l.address as Address,
+    // price right after the trade, from the reserves the event carries
+    price: typeof a.virtualHype === 'bigint' && typeof a.virtualToken === 'bigint' && (a.virtualToken as bigint) > 0n
+      ? Number(formatEther(a.virtualHype as bigint)) / Number(formatEther(a.virtualToken as bigint)) : 0,
   }
 }
 export async function fetchTrades(pool: Address, from: bigint, to: bigint): Promise<Trade[]> {
@@ -351,4 +406,16 @@ export async function send(req: { address: Address; abi: Abi; functionName: stri
     gas = (est * BigInt(100 + gasBufferPct)) / 100n
   }
   return wallet.client!.writeContract({ ...(request as Parameters<WalletClient['writeContract']>[0]), account: wallet.account!, chain: ELYSIUM, ...(gas ? { gas } : {}) })
+}
+
+/* ---------- Block timestamps (cached; a block's time never changes) ---------- */
+const blockTs = new Map<bigint, number>()
+export async function blockTimes(blocks: bigint[]): Promise<Map<bigint, number>> {
+  const need = [...new Set(blocks)].filter((b) => !blockTs.has(b))
+  for (let i = 0; i < need.length; i += 40) {
+    const part = need.slice(i, i + 40)
+    const got = await Promise.all(part.map((b) => pub.getBlock({ blockNumber: b }).then((x) => Number(x.timestamp)).catch(() => null)))
+    part.forEach((b, j) => { if (got[j] !== null) blockTs.set(b, got[j]!) })
+  }
+  return blockTs
 }

@@ -8,6 +8,7 @@ import { renderLadder } from './views/ladder'
 import { renderLaunch } from './views/launch'
 import { renderIssue } from './views/issue'
 import { renderManual } from './views/manual'
+import { renderProfile } from './views/profile'
 
 type View = (root: HTMLElement, arg: string) => (() => void) | void
 const routes: { key: string; t: string; view: View }[] = [
@@ -15,6 +16,7 @@ const routes: { key: string; t: string; view: View }[] = [
   { key: 'ladder', t: 'Launches', view: renderLadder },
   { key: 'issue', t: 'Issue', view: renderIssue },
   { key: 'manual', t: 'Manual', view: renderManual },
+  { key: 'profile', t: 'Profile', view: renderProfile },
 ]
 
 const app = document.getElementById('app')!
@@ -46,7 +48,8 @@ function searchBox() {
       const list = await fetchLaunches()
       const s = q.toLowerCase().replace(/^#/, '')
       const hit = list.find((l) => l.symbol.toLowerCase() === s || String(l.id) === s || l.token.toLowerCase() === s || l.pool.toLowerCase() === s)
-      location.hash = hit ? `#/launch/${hit.id}` : `#/ladder/${encodeURIComponent(q)}`
+      // a wallet address that is not a token or pool opens that address's profile
+      location.hash = hit ? `#/launch/${hit.id}` : /^0x[0-9a-fA-F]{40}$/.test(q) ? `#/profile/${q}` : `#/ladder/${encodeURIComponent(q)}`
     } catch { location.hash = `#/ladder/${encodeURIComponent(q)}` }
     input.blur()
   })
@@ -56,6 +59,8 @@ function searchBox() {
 function walletBtn(cls = 'btn') {
   const btn = h('button', { class: cls, 'data-wallet': '' }, 'Connect wallet')
   btn.addEventListener('click', async () => {
+    // connected on the right chain: the button is the way to the profile
+    if (wallet.account && wallet.chainId === ELYSIUM.id) { location.hash = '#/profile'; return }
     try {
       if (!wallet.account) await wallet.connect()
       if (wallet.chainId !== ELYSIUM.id) await wallet.ensureChain()
@@ -106,7 +111,14 @@ const topnav = h('header', { class: 'topnav' },
     brandEl(), h('span', { class: 'envtag' }, ENV_SHORT), navLinks('tnav'), desk.wrap,
     h('div', { class: 'tright' }, netChip(), h('a', { class: 'btn solid tissue', href: '#/issue' }, '+ Issue a launch'), walletBtn('btn wbtn'), menuBtn)))
 const stage = h('main', { class: 'stage', id: 'stage' })
-app.append(h('div', { class: 'frame' }, topnav, drawer, provenance(), stage))
+const TABS: [string, string, string][] = [['', 'Home', 'M3 10.5 12 3l9 7.5V21H3z'], ['ladder', 'Launches', 'M4 6h16M4 12h16M4 18h16'], ['issue', 'Issue', 'M12 5v14M5 12h14'], ['profile', 'Profile', 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c1.5-4 4.5-6 8-6s6.5 2 8 6']]
+const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Sections' }, ...TABS.map(([k, t, d]) => {
+  const a = h('a', { href: '#/' + k, 'data-key': k })
+  a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`
+  a.append(h('span', null, t))
+  return a
+}))
+app.append(h('div', { class: 'frame' }, topnav, drawer, provenance(), stage, tabbar))
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); desk.input.focus() }
 })
@@ -146,7 +158,7 @@ function route() {
   let view: View
   if (head === 'launch') { view = renderLaunch; key = 'ladder' }
   else view = (routes.find((r) => r.key === head) ?? routes[0]).view
-  document.querySelectorAll<HTMLAnchorElement>('.tnav a, .dnav a').forEach((a) => {
+  document.querySelectorAll<HTMLAnchorElement>('.tnav a, .dnav a, .tabbar a').forEach((a) => {
     if (a.dataset.key === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current')
   })
   const r = routes.find((x) => x.key === key)
